@@ -1,0 +1,2 @@
+,FOV size (nm),Pixel size (nm),ADC/photon,Read-out noise (ADC),Constant offset (ADC),Emitter density (emitters/um^2),STD of emitter density (emitters/um^2),Number of frames,Sigma (nm)),STD of Sigma (nm)),Number of photons,STD of number of photons,SNR,STD of SNR
+0,6400,100,1,4.5,50,6,0,20,90,5,2250,250,0.0,0.0

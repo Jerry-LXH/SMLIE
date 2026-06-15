@@ -1,0 +1,9 @@
+'pos ','.pos';
+'rotation angle ', '.annotation.rotationpos.angle'
+'rotation length ', '.annotation.rotationpos.length'
+'PSF L ', '.evaluation.generalStatistics.PSFlayers'
+'locpmed L ', '.evaluation.generalStatistics.locplayers'
+'locs L ', '.evaluation.generalStatistics.Nlayers'
+'locs ungrouped', '.evaluation.generalStatistics.Nch'
+'locs grouped', '.evaluation.generalStatistics.Nchg'
+'mean phot','.evaluation.generalStatistics.layers1.meanphot'

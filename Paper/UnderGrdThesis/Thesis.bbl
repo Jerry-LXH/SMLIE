@@ -1,0 +1,88 @@
+\begin{thebibliography}{10}
+
+\bibitem{rustSubdiffractionlimitImagingStochastic2006}
+M.~J. Rust, M.~Bates, and X.~Zhuang, ``Sub-diffraction-limit imaging by stochastic optical reconstruction microscopy ({{STORM}}),'' {\em Nature Methods}, vol.~3, pp.~793--796, Oct. 2006.
+
+\bibitem{ovesnyThunderSTORMComprehensiveImageJ2014}
+M.~Ovesn{\'y}, P.~K{\v r}{\'i}{\v z}ek, J.~Borkovec, Z.~{\v S}vindrych, and G.~M. Hagen, ``{{ThunderSTORM}}: A comprehensive {{ImageJ}} plug-in for {{PALM}} and {{STORM}} data analysis and super-resolution imaging,'' {\em Bioinformatics}, vol.~30, pp.~2389--2390, Aug. 2014.
+
+\bibitem{stallingaAccuracyGaussianPoint2010}
+S.~Stallinga and B.~Rieger, ``Accuracy of the {{Gaussian Point Spread Function}} model in {{2D}} localization microscopy,'' {\em Optics Express}, vol.~18, pp.~24461--24476, Nov. 2010.
+
+\bibitem{goodmanIntroductionFourierOptics2005}
+J.~W. Goodman, {\em Introduction to {{Fourier Optics}}}.
+\newblock {Roberts and Company Publishers}, 2005.
+
+\bibitem{mccutchenGeneralizedApertureThreeDimensional1964}
+C.~W. McCutchen, ``Generalized {{Aperture}} and the {{Three-Dimensional Diffraction Image}},'' {\em JOSA}, vol.~54, pp.~240--244, Feb. 1964.
+
+\bibitem{gibsonExperimentalTestAnalytical1991}
+S.~F. Gibson and F.~Lanni, ``Experimental test of an analytical model of aberration in an oil-immersion objective lens used in three-dimensional light microscopy,'' {\em JOSA A}, vol.~8, pp.~1601--1613, Oct. 1991.
+
+\bibitem{torokElectromagneticDiffractionLight1997}
+P.~T{\"o}r{\"o}k and P.~Varga, ``Electromagnetic diffraction of light focused through a stratified medium,'' {\em Applied Optics}, vol.~36, pp.~2305--2312, Apr. 1997.
+
+\bibitem{liRealtime3DSinglemolecule2018}
+Y.~Li, M.~Mund, P.~Hoess, J.~Deschamps, U.~Matti, B.~Nijmeijer, V.~J. Sabinina, J.~Ellenberg, I.~Schoen, and J.~Ries, ``Real-time {{3D}} single-molecule localization using experimental point spread functions,'' {\em Nature Methods}, vol.~15, pp.~367--369, May 2018.
+
+\bibitem{mcgortyCorrectionDepthdependentAberrations2014}
+R.~McGorty, J.~Schnitzbauer, W.~Zhang, and B.~Huang, ``Correction of depth-dependent aberrations in {{3D}} single-molecule localization and super-resolution microscopy,'' {\em Optics Letters}, vol.~39, pp.~275--278, Jan. 2014.
+
+\bibitem{hanserPhaseRetrievalHighnumericalaperture2003}
+B.~M. Hanser, M.~G.~L. Gustafsson, D.~A. Agard, and J.~W. Sedat, ``Phase retrieval for high-numerical-aperture optical systems,'' {\em Optics Letters}, vol.~28, pp.~801--803, May 2003.
+
+\bibitem{hanserPhaseretrievedPupilFunctions2004}
+B.~M. Hanser, M.~G.~L. Gustafsson, D.~A. Agard, and J.~W. Sedat, ``Phase-retrieved pupil functions in wide-field fluorescence microscopy,'' {\em Journal of Microscopy}, vol.~216, no.~1, pp.~32--48, 2004.
+
+\bibitem{liuThreeDimensionalSingle2013}
+S.~Liu, E.~B. Kromann, W.~D. Krueger, J.~Bewersdorf, and K.~A. Lidke, ``Three dimensional single molecule localization using a phase retrieved pupil function,'' {\em Optics Express}, vol.~21, pp.~29462--29487, Dec. 2013.
+
+\bibitem{xuThreedimensionalNanoscopyWhole2020}
+F.~Xu, D.~Ma, K.~P. MacPherson, S.~Liu, Y.~Bu, Y.~Wang, Y.~Tang, C.~Bi, T.~Kwok, A.~A. Chubykin, P.~Yin, S.~Calve, G.~E. Landreth, and F.~Huang, ``Three-dimensional nanoscopy of whole cells and tissues with in situ point spread function retrieval,'' {\em Nature Methods}, vol.~17, pp.~531--540, May 2020.
+
+\bibitem{zhangAnalyzingComplexSinglemolecule2018}
+P.~Zhang, S.~Liu, A.~Chaurasia, D.~Ma, M.~J. Mlodzianoski, E.~Culurciello, and F.~Huang, ``Analyzing complex single-molecule emission patterns with deep learning,'' {\em Nature Methods}, vol.~15, pp.~913--916, Nov. 2018.
+
+\bibitem{siemonsRobustAdaptiveOptics2021}
+M.~E. Siemons, N.~A.~K. Hanemaaijer, M.~H.~P. Kole, and L.~C. Kapitein, ``Robust adaptive optics for localization microscopy deep in complex tissue,'' {\em Nature Communications}, vol.~12, p.~3407, June 2021.
+
+\bibitem{nehmeDeepSTORMSuperresolutionSinglemolecule2018}
+E.~Nehme, L.~E. Weiss, T.~Michaeli, and Y.~Shechtman, ``Deep-{{STORM}}: Super-resolution single-molecule microscopy by deep learning,'' {\em Optica}, vol.~5, pp.~458--464, Apr. 2018.
+
+\bibitem{boydDeepLocoFast3D2018}
+N.~Boyd, E.~Jonas, H.~Babcock, and B.~Recht, ``{{DeepLoco}}: {{Fast 3D Localization Microscopy Using Neural Networks}},'' Feb. 2018.
+
+\bibitem{zelgerThreedimensionalLocalizationMicroscopy2018}
+P.~Zelger, K.~Kaser, B.~Rossboth, L.~Velas, G.~J. Sch{\"u}tz, and A.~Jesacher, ``Three-dimensional localization microscopy using deep learning,'' {\em Optics Express}, vol.~26, pp.~33166--33179, Dec. 2018.
+
+\bibitem{zhangUltrafastAccurateRobust2013}
+Y.~Zhang, L.~Gu, H.~Chang, W.~Ji, Y.~Chen, M.~Zhang, L.~Yang, B.~Liu, L.~Chen, and T.~Xu, ``Ultrafast, accurate, and robust localization of anisotropic dipoles,'' {\em Protein \& Cell}, vol.~4, pp.~598--606, Aug. 2013.
+
+\bibitem{hershkoMulticolorLocalizationMicroscopy2019}
+E.~Hershko, L.~E. Weiss, T.~Michaeli, and Y.~Shechtman, ``Multicolor localization microscopy and point-spread-function engineering by deep learning,'' {\em Optics Express}, vol.~27, pp.~6158--6183, Mar. 2019.
+
+\bibitem{gaireAcceleratingMulticolorSpectroscopic2020}
+S.~K. Gaire, Y.~Zhang, H.~Li, R.~Yu, H.~F. Zhang, and L.~Ying, ``Accelerating multicolor spectroscopic single-molecule localization microscopy using deep learning,'' {\em Biomedical Optics Express}, vol.~11, pp.~2705--2721, May 2020.
+
+\bibitem{nehmeDeepSTORM3DDense3D2020}
+E.~Nehme, D.~Freedman, R.~Gordon, B.~Ferdman, L.~E. Weiss, O.~Alalouf, T.~Naor, R.~Orange, T.~Michaeli, and Y.~Shechtman, ``{{DeepSTORM3D}}: Dense {{3D}} localization microscopy and {{PSF}} design by deep learning,'' {\em Nature Methods}, vol.~17, pp.~734--740, July 2020.
+
+\bibitem{speiserDeepLearningEnables2021}
+A.~Speiser, L.-R. M{\"u}ller, P.~Hoess, U.~Matti, C.~J. Obara, W.~R. Legant, A.~Kreshuk, J.~H. Macke, J.~Ries, and S.~C. Turaga, ``Deep learning enables fast and dense single-molecule localization with high accuracy,'' {\em Nature Methods}, vol.~18, pp.~1082--1090, Sept. 2021.
+
+\bibitem{speiserTeachingDeepNeural2020}
+A.~Speiser, L.-R. M{\"u}ller, U.~Matti, C.~J. Obara, W.~R. Legant, J.~Ries, J.~H. Macke, and S.~C. Turaga, ``Teaching deep neural networks to localize single molecules for super-resolution microscopy,'' July 2020.
+
+\bibitem{guoDeepLearningbasedAberration2025}
+M.~Guo, Y.~Wu, C.~M. Hobson, Y.~Su, S.~Qian, E.~Krueger, R.~Christensen, G.~Kroeschell, J.~Bui, M.~Chaw, L.~Zhang, J.~Liu, X.~Hou, X.~Han, Z.~Lu, X.~Ma, A.~Zhovmer, C.~Combs, M.~Moyle, E.~Yemini, H.~Liu, Z.~Liu, A.~Benedetto, P.~La~Riviere, D.~{Col{\'o}n-Ramos}, and H.~Shroff, ``Deep learning-based aberration compensation improves contrast and resolution in fluorescence microscopy,'' {\em Nature Communications}, vol.~16, p.~313, Jan. 2025.
+
+\bibitem{lakshminarayananZernikePolynomialsGuide2011}
+V.~Lakshminarayanan and A.~{and Fleck}, ``Zernike polynomials: A guide,'' {\em Journal of Modern Optics}, vol.~58, pp.~545--561, Apr. 2011.
+
+\bibitem{piestunPropagationinvariantWaveFields2000}
+R.~Piestun, Y.~Y. Schechner, and J.~Shamir, ``Propagation-invariant wave fields with finite energy,'' {\em JOSA A}, vol.~17, pp.~294--303, Feb. 2000.
+
+\bibitem{chaoFisherInformationTheory2016}
+J.~Chao, E.~S. Ward, and R.~J. Ober, ``Fisher information theory for parameter estimation in single molecule microscopy: Tutorial,'' {\em JOSA A}, vol.~33, pp.~B36--B57, July 2016.
+
+\end{thebibliography}

@@ -1,0 +1,2 @@
+- 第一次作业的代码和数据分析都在clustering.ipynb文件中，编译环境为python3.9
+- 第二次作业下载的文件在alphafold目录下，截图在根目录下

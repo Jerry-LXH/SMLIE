@@ -1,0 +1,1 @@
+{"title":"Simulation Metadata","author":"Jerry Ling","date":"29-Jan-2026 17:46:03","params":{"lambda":0.57,"NA":1.49,"RI":1.515,"unsample":10,"xSize":257,"xPixelSize":0.10666666666666667,"zSize":8,"zPixelSize":0.10666666666666667,"pointsdensity":0.001,"photonmean":600,"photonstd":20,"gn_mean":2,"gn_std":0.5,"pn_mean":4}}

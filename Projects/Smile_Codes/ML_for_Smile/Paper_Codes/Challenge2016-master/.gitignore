@@ -1,0 +1,8 @@
+*~
+.*
+*.exe
+!.gitignore
+!.gitattributes
+*.zip
+*.tif
+./PSFs/

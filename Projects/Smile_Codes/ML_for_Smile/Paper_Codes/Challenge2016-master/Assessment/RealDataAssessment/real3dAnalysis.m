@@ -1,0 +1,53 @@
+%run this on a directory containing the real data csv files
+% Or copy to said directory
+%modify this list to match the files you want to analyse
+%Need to add to path:
+%   'lm-challenge2016\Challenge2016\Assessment\Matlab\3dPlotTools'
+%   'lm-challenge2016\Challenge2016\Assessment\Matlab\driftCorrection\driftcorrection3D'
+%   'lm-challenge2016\Challenge2016\Assessment\RealDataAssessment'
+
+fnameTubulinList = {...
+'3D-DAOSTORM-WOBBLE____loca___Tubulin_driftCorr.csv',...
+'Cspline____loca___Tubulin_driftCorr.csv',...             
+'MIAtool-WOBBLE____loca___Tubulin_driftCorr.csv',...      
+'QuickPALM____loca___Tubulin_driftCorr.csv',...           
+'RapidSTORM-WOBBLE____loca___Tubulin_driftCorr.csv',...          
+'SMAP-2018____loca___Tubulin_driftCorr.csv',...
+'ThunderSTORM-WOBBLE____loca___Tubulin_driftCorr.csv',...
+'WaveTracer____loca___Tubulin_driftCorr.csv'};
+fnameNPCList = {...
+'3D-DAOSTORM-WOBBLE____loca___NPC_driftCorr.csv',...      
+'Cspline____loca___NPC_driftCorr.csv',...                 
+'MIAtool-WOBBLE____loca___NPC_driftCorr.csv',...          
+'QuickPALM____loca___NPC_driftCorr.csv',...               
+'RapidSTORM-WOBBLE____loca___NPC_driftCorr.csv',...              
+'ThunderSTORM-WOBBLE____loca___NPC_driftCorr.csv',...
+'SMAP-2018____loca___NPC_driftCorr.csv',...               
+'WaveTracer____loca___NPC_driftCorr.csv'};
+%1. Tubulin plots
+
+nTub = numel(fnameTubulinList);
+for ii=1:nTub
+    close all
+    f = fnameTubulinList{ii}
+    dirname = [f(1:end-4)];
+    if ~exist(dirname,'dir')
+        mkdir(dirname)
+    end
+    savename = [dirname,filesep(),dirname];
+    tubulin_plotter(f,savename);
+end
+
+nNPC = numel(fnameNPCList);
+%2. NPC plots 
+for ii=1:nNPC
+    close all
+    f = fnameNPCList{ii}
+    dirname = [f(1:end-4)];
+    if ~exist(dirname,'dir')
+        mkdir(dirname)
+    end
+    savename = [dirname,filesep(),dirname];
+    NPC_plotter(f,savename);
+end
+

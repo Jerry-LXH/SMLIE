@@ -1,0 +1,120 @@
+\documentclass[12pt]{ctexart}%中文包
+\usepackage{graphicx}%图片引用包
+\usepackage{amssymb}%特殊符号
+\usepackage{amsmath,amsfonts,bm}%矩阵
+\usepackage{amsthm}%定理
+\usepackage{geometry}%缩放
+\usepackage{hyperref}%超链接
+\usepackage{framed}%框框
+\usepackage{color}%颜色
+\usepackage{mathrsfs}%花体
+\usepackage{anyfontsize}
+\usepackage{indentfirst}%缩进
+\usepackage{extsizes}%size
+\usepackage{newtxtext,newtxmath}%times风格字体
+\usepackage{mdframed}%边栏
+\usepackage{enumerate}
+\usepackage{braket}
+
+\surroundwithmdframed[
+  linecolor=gray,
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=4pt,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=0pt,
+  innerbottommargin=5pt
+]{theorem}
+\surroundwithmdframed[
+  linecolor=gray,
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=4pt,
+  innerleftmargin=10pt,
+  innerrightmargin=10pt,
+  innertopmargin=0pt,
+  innerbottommargin=5pt
+]{definition}
+\surroundwithmdframed[
+    linecolor=black,
+    leftline=false,
+    rightline=false,
+    linewidth=0.5pt,
+    innerleftmargin=10pt,
+    innerrightmargin=10pt,
+    innertopmargin=0pt,
+    innerbottommargin=5pt
+]{note}
+
+\newtheorem{theorem}{Theorem}
+\newtheorem{definition}{Definition}
+\newtheorem{note}{Note}
+\geometry{a4paper,scale=0.85}
+\hypersetup
+    {
+        hypertex=true,
+        colorlinks=true,
+        linkcolor=blue,
+        anchorcolor=blue,
+        citecolor=blue
+    }
+
+\title{Spatial SNR Calculation for Single Molecular Imaging\\单分子成像的信噪比(?)计算}
+\author{SMILe Group} 
+\date{2024.11}
+\begin{document}  %begin后括号内是文件类型
+
+
+\maketitle  %生成标题
+\section{General Theory}
+\subsection*{Random noise with definite signal}
+To calculate the SNR of a given signal, we need to identify first what signal and noise are:
+\begin{definition}[SNR]
+    \begin{equation}
+        SNR=\frac{I_{signal}}{I_{noise}}
+    \end{equation}
+\end{definition}
+\par Generally, our object may be represented as a function $f(\vec{x})$, from $\mathbb{E}\to\mathbb{R}$. Often, the noise is random so we must recognize it as a random variable $I_{noise}$, who gives different value each experiment. Now, if we define \textbf{what will always exists without the signal} as noise, and suppose a \textbf{linearity} of system(eg. Imaging), then value observed in experiments with a signal existing should be:
+\begin{equation}
+    I_{exp}=I_{noise}+I_{signal}
+\end{equation}
+Thus the expected ones will be:
+\begin{equation}
+    \mathbb{E}I_{exp}=\mathbb{E}I_{noise}+I_{signal}
+\end{equation}
+So when signal is Constant, we may subtract averaged noise(measured with out signal) from $I_{exp}$ to get a relative value whose expection is true signal $I_{real}$:
+\begin{equation}
+    I_{rel}\triangleq I_{exp}-\overline {I_{noise}}
+\end{equation}
+\begin{equation}
+    \mathbb{E}I_{rel}= I_{signal}
+\end{equation}
+\par Now that we get the relative value, we further recognize that random noise will fluctuate around its expectation. If the extent of fluctuation is comparable to the relative value, it is expected that the signal may be distorted. So we use the variance to serve as noise in the formula:
+\begin{equation}
+    SNR=\frac{I_{rel}}{\sigma_{noise}}
+\end{equation}
+
+\subsection*{Random noise with random signal}
+Now that the signal itself is random, we must think of the true one as the expectation of signal. 
+\begin{equation}
+    \mathbb{E}I_{exp}=\mathbb{E}I_{noise}+\mathbb{E}I_{signal}
+\end{equation}
+We still need to subtract averaged noise from observed value, but now $I_{rel}$ will certainly have \textbf{more fluctuation} then before. The problem is how can we estimate the variance of the signal itself.
+\par If we can get rid of the background noise, we may calculate the variance over experiments. But that's not a problem, since the variance is linear over 2 random variables. The key is to estimate the expectation of $I_{rel}$:
+\begin{equation}
+    \sigma^2_{total}=\sigma^2_{noise}+\sigma^2_{signal}
+\end{equation}
+\begin{equation}
+    \sigma^2_{total}=\mathbb{E}[({I_{rel}-\mathbb{E}I_{rel}})^2]
+\end{equation}
+We write this conclusion into our formula:
+\begin{equation}
+    SNR=\frac{\mathbb{E}I_{rel}}{\sigma_{total}}
+\end{equation}
+\section{Analysis in smImaging}
+\subsection*{Theoretical variance of sm}
+
+\end{document}

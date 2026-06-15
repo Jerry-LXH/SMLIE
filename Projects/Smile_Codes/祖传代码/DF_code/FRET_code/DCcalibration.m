@@ -1,0 +1,112 @@
+%% 计算双通道间的偏差，并使用三次函数进行拟合
+function [fit_result,T,loc_red,loc_green]=DCcalibration(path)
+files = dir(fullfile(path, '*std*.sif*'));
+% 获取该文件下的每个数据文件
+datanames = {files(~[files.isdir]).name}';
+% 获取数据的数量
+datanumber=size(datanames,1);
+loc_red_all=[];
+loc_green_all=[];
+pointpfov=[];
+for i=1:datanumber
+    dataname_mat=cell2mat(datanames(i,:));
+    pathname=strcat(path,dataname_mat);
+    % 读取该文件
+    seq=readsif(pathname);
+    imadata=double(seq.imageData(:,:,1));
+    imadata=imadata.*3.75./300;
+    dataedge=128;
+    green=imadata(dataedge:255+dataedge,1:256);
+    red=imadata(dataedge:255+dataedge,257:512);
+    % 先找到最亮点，如果
+    [~,yy]=find(red==max(red(:)));
+    if yy<20&&max(red(:))>20*mean(red(:))
+        red(:,1:yy+5)=mean(red(:));
+    end
+    loc_green=loc_molecule_DF(green,1);
+    loc_red=loc_molecule_DF(red,1);
+    loc_red=filter_duplicate_points(loc_red,2);
+    loc_green(loc_green(:,1)>251|loc_green(:,1)<6|loc_green(:,2)>251|loc_green(:,2)<6,:)=[];
+    loc_red(loc_red(:,1)>251|loc_red(:,1)<6|loc_red(:,2)>251|loc_red(:,2)<6,:)=[];
+    matched_points_A=[];
+    matched_points_B=[];
+    gap=5;
+    for m = 1:size(loc_red, 1)
+        for n = 1:size(loc_green, 1)
+            distance = norm(loc_red(m, :) - loc_green(n, :));
+            if distance < gap
+                matched_points_A = [matched_points_A; loc_red(m, :)];
+                matched_points_B = [matched_points_B; loc_green(n, :)];
+            end
+        end
+    end
+    loc_green_all=[loc_green_all;matched_points_B];
+    loc_red_all=[loc_red_all;matched_points_A];
+    pointpfov(i,1)=size(matched_points_A,1);
+end
+
+x = loc_red_all(:,1);
+y = loc_red_all(:,2);
+u = loc_green_all(:,1);
+v = loc_green_all(:,2);
+% 创建非线性转换矩阵
+% 构造设计矩阵
+X = [ones(size(x)), x, y, x.^2, y.^2, x.*y, x.^3, y.^3, x.^2.*y, x.*y.^2];
+% 求解u = X * a
+a = X \ u;
+% 求解v = X * b
+b = X \ v;
+fit_result=[a b];
+%运用最后一帧进行验证
+loc_green1(:,1)=X*a;
+loc_green1(:,2)=X*b;
+
+writematrix(fit_result,[path 'calibration_result.xlsx'],"WriteMode","append")
+% 
+% writematrix(loc_red,[path 'loc_red.xlsx'],"WriteMode","append")
+% writematrix(loc_green,[path 'loc_green.xlsx'],"WriteMode","append")
+% 计算线性转移矩阵
+A = loc_red_all;
+B = loc_green_all;
+% 添加齐次坐标
+A_homogeneous = [A, ones(size(A, 1), 1)];
+B_homogeneous = [B, ones(size(B, 1), 1)];
+% 使用最小二乘法求解转换矩阵
+T = (A_homogeneous' * A_homogeneous) \ (A_homogeneous' * B_homogeneous);
+% 将A矩阵中的坐标转换为B矩阵中的坐标
+A_transformed = A_homogeneous * T;
+
+writematrix(T,[path 'calibration_result_transformed.xlsx'],"WriteMode","append")
+
+start=1;
+for i=1:datanumber
+    dataname_mat=cell2mat(datanames(i,:));
+    pathname=strcat(path,dataname_mat);
+    % 读取该文件
+    seq=readsif(pathname);
+    imadata=double(seq.imageData(:,:,1));
+    imadata=imadata.*3.75./300;
+    dataedge=128;
+    green=imadata(dataedge:255+dataedge,1:256);
+    red=imadata(dataedge:255+dataedge,257:512);
+
+    figure
+    imagesc(green);
+    title('poly')
+    colormap('gray')
+    hold on
+    plot(loc_green1(start:pointpfov(i,1)+start-1,1),loc_green1(start:pointpfov(i,1)+start-1,2),'Color','green','Marker','.','LineStyle','none')
+    viscircles([loc_green1(start:pointpfov(i,1)+start-1,1),loc_green1(start:pointpfov(i,1)+start-1,2)],3.*ones(pointpfov(i,1),1),'color','green','LineWidth',1.5,'EnhanceVisibility',false);
+    hold off
+
+%     figure
+%     imagesc(green);
+%     title('transformed')
+%     colormap('gray')
+%     hold on
+%     plot(A_transformed(start:pointpfov(i,1)+start-1,1),A_transformed(start:pointpfov(i,1)+start-1,2),'Color','green','Marker','.','LineStyle','none')
+%     viscircles([A_transformed(start:pointpfov(i,1)+start-1,1),A_transformed(start:pointpfov(i,1)+start-1,2)],3.*ones(pointpfov(i,1),1),'color','green','LineWidth',1.5,'EnhanceVisibility',false);
+%     hold off
+
+    start=start+pointpfov(i,1);
+end
