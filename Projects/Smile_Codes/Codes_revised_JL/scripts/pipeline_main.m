@@ -83,9 +83,10 @@
 %% ===================== Module 1: Detect + Localize =====================
 
     [file_dir, file_base, ~] = fileparts(parameters.file_name);
+    cacheFile = fullfile(file_dir, [file_base, '_locResult.mat']);
 
     locResult = pipeline.detectAndLocalize(windowed_raw_data, parameters, ...
-        'cacheFile', fullfile(file_dir, [file_base, '_locResult.mat']));
+        'cacheFile', cacheFIle);
 
 %% ===================== Module 2: Drift Correction =====================
 

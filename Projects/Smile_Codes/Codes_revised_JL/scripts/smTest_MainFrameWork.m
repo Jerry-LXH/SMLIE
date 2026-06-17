@@ -29,10 +29,10 @@
 
 
     % --- 文件与 I/O ---
-    %parameters.file_name = ...
-        %'/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3/20260603/532nm_1x_0p1S_1000frames_1p95mW_cy3.sif';
     parameters.file_name = ...
-        '/Volumes/SMILeSSD/Optics/TE2000UTests/beads/emccd_left_beads_0.1_0.5mW_fov2/1.sif';
+        '/Volumes/SMILeSSD/PacBio/Cy3Cy5/Cy5H_638nm_1000frames_0p1s_12mW_fov1.sif';
+    %parameters.file_name = ...
+        %'/Volumes/SMILeSSD/Optics/TE2000UTests/beads/20260616/532nm_1x_0p1S_100frames_0p33mW_beads_varill_fov1.sif';
         
     parameters.interval = 0; % 相邻帧之间的死时间（秒）。曝光时间从 .sif 文件头读取，总帧间隔 = exposure + interval
 
@@ -40,14 +40,15 @@
      % 裁切的行/列范围。应略大于最终裁剪的范围（如257*257）以保证 drift correction 有足够重叠，且尽量居中
     parameters.row_range = 100:412;
     parameters.col_range = 100:412;
+    parameters.row_range = 100:412;
+    parameters.col_range = 260:510;
 
     % --- Detection/Localization 参数 ---
     psf_estimated = 1.1; % pixel size
-    parameters.k_sigma = 7.0; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
+    parameters.k_sigma = 3.0; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
     parameters.edge = ceil(psf_estimated*3.3-0.5); % 边缘防护宽度（像素）。距图像边缘 < edge 的 detection 将被跳过，避免 PSF 截断导致拟合失败
     parameters.viz_enabled = true; % 是否绘制 detection / localization 的叠加图
     parameters.viz_max_frames = 5000; % 可视化时最多显示的帧数（避免帧数过多导致绘图缓慢）
-
 
     % --- Drift Estimation 参数 ---
     parameters.drift_corr = true;           % 是否执行漂移校正；false 则跳过，delta_sum 置零
@@ -56,10 +57,10 @@
 
     % --- Drift Correction ---
     parameters.row_width = 257;
-    parameters.col_width = 257;
+    parameters.col_width = 230;
 
     % --- Emitter Analysis 参数 ---
-    parameters.bleach_time = 4;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
+    parameters.bleach_time = 10;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
     parameters.searching_radius = 2;        % emitter 聚类搜索半径（像素）
     parameters.livetime_th = 0.2;           % 最短存活时间阈值（秒），低于此值的 emitter 被过滤
     parameters.jump_threshold = 3.5;        % 位置跳跃过滤阈值（σ 倍数）
@@ -70,7 +71,7 @@
 
     % --- State Analysis 参数 ---
     parameters.state_method = 'CHANGEPOINT';
-    parameters.state_penalty = 4.0;         % changepoint 惩罚系数
+    parameters.state_penalty = 3.5;         % changepoint 惩罚系数
     parameters.state_min_seg_len = 4;       % 最短 segment 长度（帧）
     parameters.state_merge_thr = 2.5;       % 状态合并阈值
     parameters.state_bleach_tail = 50;      % 漂白尾部截断（帧）
@@ -82,7 +83,7 @@
     parameters.one_frame_time = parameters.ex_time + parameters.interval; % 计算单帧总时长（曝光 + 死时间），供后续使用
 
 %% Windowing
-    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:100);
+    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 10:1000);
     parameters.frames = size(windowed_raw_data, 3);   % 记录总帧数，后续多处复用
 
     fprintf('Windowed Data: %d × %d × %d\n', ...
@@ -100,6 +101,7 @@
     figure;
     viz.plotImage(windowed_raw_data, 1:1, 'hot','Drift-uncorrected Image and Detections');
     hold on;
+
 %% Detection (Roughly find locs)
     uncorrected_detected_total = detect.findMaxima(windowed_raw_data, parameters.k_sigma); % 输出: [row, col, frame] 三列矩阵
 
@@ -157,7 +159,7 @@
     uncorrected_loc_total = uncorrected_super_loc_total(:, [1, 2, 7]);
     fprintf('Localization result loaded: %s\n', load_name);
 
-%% Drift Estimation (NP-cloud)
+%% Drift Estimation + correct (NP-cloud)
     % 用 localization 的中位定位精度作为 kernel bandwidth
     uncertainty = median(uncorrected_super_loc_total(:,6));
 
@@ -172,7 +174,7 @@
         fprintf('Drift correction disabled, delta_sum set to zero.\n');
     end
 
-%% Correct Drift
+    % Correct Drift
     % 根据 delta_sum 对原始数据和定位进行漂移校正，同时裁切到目标尺寸
     [data, loc_total, loc_idx] = postproc.drift.correctDrift( ...
         windowed_raw_data, uncorrected_loc_total, delta_sum, ...
@@ -180,6 +182,13 @@
 
     % loc_idx 为保留下来的定位索引，用于同步提取完整 7 列信息
     corrected_super_loc_total = uncorrected_super_loc_total(loc_idx, :);
+
+    % Unpack MLE Columns
+    % 将校正后的 7 列 localization 拆分为独立变量，便于后续引用
+    brightness = corrected_super_loc_total(:,3);   % 光子数
+    background = corrected_super_loc_total(:,4);   % 背景
+    sigma      = corrected_super_loc_total(:,5);   % PSF 宽度（像素）
+    sigma_loc  = corrected_super_loc_total(:,6);   % 定位精度 / CRLB（像素）
 
 %% Visualize Drift
     viz.plotTracking(delta_sum, parameters.one_frame_time, [], 'Drift Tracking');
@@ -195,12 +204,7 @@
     data = io.readTiffStack(in_corr_tif);
     fprintf('Corrected TIFF stack loaded: %s\n', in_corr_tif);
 
-%% Unpack MLE Columns
-    % 将校正后的 7 列 localization 拆分为独立变量，便于后续引用
-    brightness = corrected_super_loc_total(:,3);   % 光子数
-    background = corrected_super_loc_total(:,4);   % 背景
-    sigma      = corrected_super_loc_total(:,5);   % PSF 宽度（像素）
-    sigma_loc  = corrected_super_loc_total(:,6);   % 定位精度 / CRLB（像素）
+
 
 %% Visualize MLE Distributions
     figure;
@@ -248,8 +252,8 @@
     emitters_filt = emitters;
     emitters_filt = postproc.emitter.filterEmitters_short(emitters_filt, min_frames, 'consecutive');
     emitters_filt = postproc.emitter.filterEmitters_firstframe(emitters_filt);
-    %emitters_filt = postproc.emitter.filterEmitters_end(emitters_filt);
-    %[emitters_filt, stats_jump] = postproc.emitter.filterEmitters_jumping(emitters_filt, parameters.jump_threshold);
+    emitters_filt = postproc.emitter.filterEmitters_end(emitters_filt);
+    [emitters_filt, stats_jump] = postproc.emitter.filterEmitters_jumping(emitters_filt, parameters.jump_threshold);
     %postproc.emitter.plotJumpStats(stats_jump);
 
     fprintf('Emitters after filtering: %d / %d\n', numel(emitters_filt), numel(emitters));
@@ -411,16 +415,194 @@
 %% Inspect Single Emitter Traces
     start_frame = 1;
     end_frame   = parameters.frames;
-    for index = 1:33
+
+    % Create folder for saving selected traces
+    [file_dir, file_base, ~] = fileparts(parameters.file_name);
+    selected_traces_dir = fullfile(file_dir, [file_base, '_selected_traces']);
+
+    for index = 1:16
         postproc.emitter.checkTrace(start_frame, end_frame, parameters.ex_time, ...
             stats.trace(index,:), stats.brightness_em(index,:), ...
-            stats.pos_matrix(:,1,index), stats.pos_matrix(:,2,index));
+            stats.pos_matrix(:,1,index), stats.pos_matrix(:,2,index), ...
+            'save_dir', selected_traces_dir, 'emitter_idx', index);
+    end
+%% Load and Analyze Selected Traces
+    % Check if selected traces directory exists and contains saved traces
+    % Create folder for saving selected traces
+    [file_dir, file_base, ~] = fileparts(parameters.file_name);
+    selected_traces_dir = fullfile(file_dir, [file_base, '_selected_traces']);
+    if isfolder(selected_traces_dir) && ~isempty(dir(fullfile(selected_traces_dir, 'emitter_*_trace.mat')))
+        % Get list of all saved trace files
+        trace_files = dir(fullfile(selected_traces_dir, 'emitter_*_trace.mat'));
+        num_traces = length(trace_files);
+
+        fprintf('Found %d saved traces in %s\n', num_traces, selected_traces_dir);
+
+        % Initialize storage for all traces
+        all_traces = [];
+        trace_names = {};
+
+        % Load all traces
+        for i = 1:num_traces
+            mat_file = fullfile(selected_traces_dir, trace_files(i).name);
+            data_loaded = load(mat_file, 'trace', 'brightness_em');
+
+            trace_data = data_loaded.trace(:);
+            all_traces = [all_traces; trace_data'];
+            trace_names{i} = trace_files(i).name;
+        end
+
+        % Calculate statistics
+        mean_trace = mean(all_traces, 1, 'omitnan');
+        std_trace = std(all_traces, 0, 1, 'omitnan');
+
+        % Calculate time axis
+        num_timepoints = length(mean_trace);
+        time_axis = (0:num_timepoints-1) * parameters.ex_time;
+
+        % Visualization
+        figure('Name', 'Selected Traces Analysis', 'Color', 'w', 'Position', [100, 100, 1000, 600]);
+
+        % Plot 1: All individual traces
+        subplot(1, 2, 1);
+        hold on;
+        colors = colormap(lines(num_traces));
+        for i = 1:num_traces
+            plot(time_axis, all_traces(i,:), '-', 'Color', colors(i,:), 'LineWidth', 0.8);
+        end
+        hold off;
+        xlabel('Time (s)', 'FontSize', 12);
+        ylabel('Intensity', 'FontSize', 12);
+        title(sprintf('Individual Traces (N=%d)', num_traces), 'FontSize', 13);
+        grid on;
+        set(gca, 'FontSize', 11);
+
+        % Plot 2: Mean trace with std as shaded region
+        subplot(1, 2, 2);
+        hold on;
+
+        upper_bound = mean_trace + std_trace;
+        lower_bound = mean_trace - std_trace;
+
+        fill_x = [time_axis, fliplr(time_axis)];
+        fill_y = [upper_bound, fliplr(lower_bound)];
+
+        h_fill = fill(fill_x, fill_y, [0.7, 0.7, 1.0], 'EdgeColor', 'none');
+        set(h_fill, 'FaceAlpha', 0.3);
+
+        h_mean = plot(time_axis, mean_trace, 'b-', 'LineWidth', 2.5);
+
+        hold off;
+        xlabel('Time (s)', 'FontSize', 12);
+        ylabel('Intensity', 'FontSize', 12);
+        title(sprintf('Mean Trace ± 1 SD (N=%d)', num_traces), 'FontSize', 13);
+        legend([h_mean, h_fill], {'Mean', '\pm 1 SD'}, 'Location', 'best');
+        grid on;
+        set(gca, 'FontSize', 11);
+
+        % Save figure
+        fig_name = fullfile(file_dir, [file_base, '_selected_traces_analysis.png']);
+        exportgraphics(gcf, fig_name, 'Resolution', 300);
+        fprintf('Analysis figure saved: %s\n', fig_name);
+
+        % Print statistics
+        fprintf('\n========== Selected Traces Statistics ==========\n');
+        fprintf('Number of traces: %d\n', num_traces);
+        fprintf('Trace length: %d frames (%.2f s)\n', num_timepoints, time_axis(end));
+        fprintf('Mean intensity: %.1f ± %.1f\n', mean(mean_trace, 'omitnan'), mean(std_trace, 'omitnan'));
+        fprintf('Max intensity: %.1f\n', max(mean_trace, [], 'omitnan'));
+        fprintf('Min intensity: %.1f\n', min(mean_trace, [], 'omitnan'));
+        fprintf('===============================================\n');
+    else
+        fprintf('No saved traces found in %s\n', selected_traces_dir);
     end
 
 %% Inspect Emitter Movie
     postproc.emitter.checkMovie(3, data, emitters_filt, ...
         stats.pos_mean_px, stats.pos_matrix, parameters.one_frame_time, ...
         'frameStep', 3, 'pauseTime', 0.005, 'clim', [0 130], 'preFrames', 100);
+
+%% Trace Avg (smooth+norm+avg)
+    traces = stats.trace;
+    [num_traces, num_timepoints] = size(traces);
+
+    % ==========================================
+    % 0. 参数设置
+    % ==========================================
+    % 设置滑动平均的窗口大小（单位：帧数）
+    % 窗口越大曲线越平滑，但可能会丢失快速变化的细节，建议根据实际采样率调整（如 3, 5, 10）
+    window_size = 5; 
+
+    % ==========================================
+    % 1. 滑动平均 (Moving Average)
+    % ==========================================
+    % 沿第 2 维度（即对每一行/每条 trace）进行滑动平均，自动忽略 NaN
+    smoothed_traces = movmean(traces, window_size, 2, 'omitnan');
+
+    % ==========================================
+    % 2. 单分子归一化 (Min-Max 归一化到 0~1)
+    % ==========================================
+    % 找到每条平滑后 trace 的最小值和最大值
+    min_vals = min(smoothed_traces, [], 2, 'omitnan');
+    max_vals = max(smoothed_traces, [], 2, 'omitnan');
+
+    % 计算极差 (Max - Min)
+    range_vals = max_vals - min_vals;
+
+    % 防止极差为 0 导致除以 0 的错误（如果某条 trace 是一条直线）
+    range_vals(range_vals == 0) = 1; 
+
+    % 利用 MATLAB 的隐式扩展（Implicit Expansion）直接对整个矩阵进行归一化
+    norm_traces = (smoothed_traces - min_vals) ./ range_vals;
+
+    % ==========================================
+    % 3. 计算平均值和不确定性
+    % ==========================================
+    % 计算所有分子的平均 trace (忽略 NaN)
+    mean_trace = mean(norm_traces, 1, 'omitnan');
+
+    % 计算不确定性 (这里默认使用标准差 SD)
+    uncertainty = std(norm_traces, 0, 1, 'omitnan'); 
+
+    % 如果想使用标准误 (SEM)，请取消下面这行的注释：
+    % uncertainty = uncertainty / sqrt(num_traces);
+
+    % ==========================================
+    % 4. 绘制趋势图和不确定性阴影
+    % ==========================================
+    time_axis = 1:num_timepoints; 
+
+    figure;
+    hold on;
+
+    % 计算阴影的上下边界
+    upper_bound = mean_trace + uncertainty;
+    lower_bound = mean_trace - uncertainty;
+
+    % 构造 fill 函数所需的多边形顶点坐标
+    fill_x = [time_axis, fliplr(time_axis)];
+    fill_y = [upper_bound, fliplr(lower_bound)];
+
+    % 绘制不确定性阴影 (浅红色阴影，换个颜色示例)
+    h_fill = fill(fill_x, fill_y, [1.0 0.6 0.6], 'EdgeColor', 'none');
+    set(h_fill, 'FaceAlpha', 0.4); % 设置透明度
+
+    % 绘制平均趋势线 (深红色实线)
+    h_plot = plot(time_axis, mean_trace, 'Color', [0.8 0.1 0.1], 'LineWidth', 2);
+
+    hold off;
+
+    % ==========================================
+    % 5. 图表美化
+    % ==========================================
+    xlabel('Time / Frames', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('Normalized Intensity', 'FontSize', 12, 'FontWeight', 'bold');
+    title(sprintf('Average Trace (Smoothed, Window=%d)', window_size), 'FontSize', 14);
+    legend([h_plot, h_fill], {'Mean Trace', 'Uncertainty (\pm 1 SD)'}, 'Location', 'best');
+    set(gca, 'FontSize', 11, 'LineWidth', 1.2);
+    box on;
+    grid on;
+
 
 %% State Analysis (Changepoint)
     states = analysis.photophys.analyzeStates(stats.trace, ...

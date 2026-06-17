@@ -58,8 +58,8 @@ function result = detectAndLocalize(windowed_raw_data, parameters, options)
     %  若存在旧版 _uncorrected_super_loc_total.mat，直接加载作为定位结果，
     %  跳过 detection 和 MLE localization。
     % ================================================================
-    [file_dir, file_base, ~] = fileparts(parameters.file_name);
-    legacy_file = fullfile(file_dir, [file_base, '_uncorrected_super_loc_total.mat']);
+    %[file_dir, file_base, ~] = fileparts(parameters.file_name);
+    %legacy_file = fullfile(file_dir, [file_base, '_uncorrected_super_loc_total.mat']);
 
     if isfile(legacy_file)
         fprintf('[detectAndLocalize] Found legacy file: %s\n', legacy_file);
