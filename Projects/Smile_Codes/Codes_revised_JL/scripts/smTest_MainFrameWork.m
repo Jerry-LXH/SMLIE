@@ -30,7 +30,7 @@
 
     % --- 文件与 I/O ---
     parameters.file_name = ...
-        '/Volumes/SMILeSSD/PacBio/Cy3Cy5/Cy5H_638nm_1000frames_0p1s_12mW_fov1.sif';
+        '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3/20260603/532nm_1x_0p1S_1000frames_1p00mW_cy3.sif';
     %parameters.file_name = ...
         %'/Volumes/SMILeSSD/Optics/TE2000UTests/beads/20260616/532nm_1x_0p1S_100frames_0p33mW_beads_varill_fov1.sif';
         
@@ -38,10 +38,11 @@
 
     % --- Windowing 参数 --- 
      % 裁切的行/列范围。应略大于最终裁剪的范围（如257*257）以保证 drift correction 有足够重叠，且尽量居中
+    %parameters.row_range = 203:448;
+    %parameters.col_range = 257:502;
+    %parameters.col_range = 1:246;
     parameters.row_range = 100:412;
     parameters.col_range = 100:412;
-    parameters.row_range = 100:412;
-    parameters.col_range = 260:510;
 
     % --- Detection/Localization 参数 ---
     psf_estimated = 1.1; % pixel size
@@ -56,8 +57,10 @@
     parameters.drift_min_locs = 30;         % 每段最少定位数
 
     % --- Drift Correction ---
-    parameters.row_width = 257;
-    parameters.col_width = 230;
+    %parameters.row_width = 233;
+    %parameters.col_width = 233;
+    parameters.row_width = 200;
+    parameters.col_width = 200;
 
     % --- Emitter Analysis 参数 ---
     parameters.bleach_time = 10;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
@@ -83,7 +86,7 @@
     parameters.one_frame_time = parameters.ex_time + parameters.interval; % 计算单帧总时长（曝光 + 死时间），供后续使用
 
 %% Windowing
-    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 10:1000);
+    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:1000);
     parameters.frames = size(windowed_raw_data, 3);   % 记录总帧数，后续多处复用
 
     fprintf('Windowed Data: %d × %d × %d\n', ...
@@ -94,12 +97,14 @@
 
 %% Export TIFF stack（optional）
     % 将裁切后的数据保存为 .tif，便于在 ImageJ / Fiji 等软件中浏览
-    out_tif = [parameters.file_name(1:end-4), '_Tifstack.tif'];
-    io.writeTiffStack(windowed_raw_data, out_tif);
+    out_tif = [parameters.file_name(1:end-4), '_Tifstack_red.tif'];
+    %io.writeTiffStack(single(windowed_raw_data), out_tif);
+    io.writeTiffStack_uint16(single(windowed_raw_data), out_tif);
     fprintf('TIFF stack stored: %s\n', out_tif);
+
 %% Viz
     figure;
-    viz.plotImage(windowed_raw_data, 1:1, 'hot','Drift-uncorrected Image and Detections');
+    viz.plotImage(windowed_raw_data, 1:500, 'hot','Drift-uncorrected Image and Detections');
     hold on;
 
 %% Detection (Roughly find locs)
@@ -252,7 +257,7 @@
     emitters_filt = emitters;
     emitters_filt = postproc.emitter.filterEmitters_short(emitters_filt, min_frames, 'consecutive');
     emitters_filt = postproc.emitter.filterEmitters_firstframe(emitters_filt);
-    emitters_filt = postproc.emitter.filterEmitters_end(emitters_filt);
+    %emitters_filt = postproc.emitter.filterEmitters_end(emitters_filt);
     [emitters_filt, stats_jump] = postproc.emitter.filterEmitters_jumping(emitters_filt, parameters.jump_threshold);
     %postproc.emitter.plotJumpStats(stats_jump);
 
@@ -274,6 +279,18 @@
         emitters_filt, parameters.frames, parameters.ex_time, parameters.interval, ...
         brightness, sigma, sigma_loc, background);
     postproc.emitter.plotEmitterStatistics(stats, 50);
+
+%% Joint distribution
+    % 创建图形窗口
+    figure('Name', '联合分布图', 'Position', [100, 100, 600, 500]);
+
+    % 绘制带边缘直方图的散点图
+    sh = scatterhistogram(stats.brightness_mean, stats.survival_sec);
+
+    % 设置图表属性
+    sh.XLabel = 'Brightness Mean (pps)';
+    sh.YLabel = 'sigma_mean (px)';
+    sh.Title = 'Joint Distribution';
 
 %% Check Brightness in First Few Frames
     F = 3;
@@ -418,14 +435,15 @@
 
     % Create folder for saving selected traces
     [file_dir, file_base, ~] = fileparts(parameters.file_name);
-    selected_traces_dir = fullfile(file_dir, [file_base, '_selected_traces']);
+    selected_traces_dir = '';%fullfile(file_dir, [file_base, '_selected_traces']);
 
-    for index = 1:16
+    for index = 1:5
         postproc.emitter.checkTrace(start_frame, end_frame, parameters.ex_time, ...
             stats.trace(index,:), stats.brightness_em(index,:), ...
             stats.pos_matrix(:,1,index), stats.pos_matrix(:,2,index), ...
             'save_dir', selected_traces_dir, 'emitter_idx', index);
     end
+    
 %% Load and Analyze Selected Traces
     % Check if selected traces directory exists and contains saved traces
     % Create folder for saving selected traces
@@ -518,9 +536,9 @@
     end
 
 %% Inspect Emitter Movie
-    postproc.emitter.checkMovie(3, data, emitters_filt, ...
+    postproc.emitter.checkMovie(5, data, emitters_filt, ...
         stats.pos_mean_px, stats.pos_matrix, parameters.one_frame_time, ...
-        'frameStep', 3, 'pauseTime', 0.005, 'clim', [0 130], 'preFrames', 100);
+        'frameStep', 3, 'pauseTime', 0.005, 'clim', [0 150], 'preFrames', 100, 'snr', stats.snr);
 
 %% Trace Avg (smooth+norm+avg)
     traces = stats.trace;

@@ -30,7 +30,7 @@
 
     % --- 文件与 I/O ---
     parameters.file_name = ...
-        '/Volumes/SMILeSSD/Optics/Ti2Tests/TirfModule/Beads_532/20260616/beads_0.1s_200fm_1.66A_var/20260616-122601721/TUC-001.tif';
+        '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3_polylys/20260609/TUC-001.tif';
     %parameters.file_name = ...
       %  '/Volumes/SMILeSSD/Optics/Ti2Tests/TirfModule/Beads_532/20260514_532_beads_0.1s_1.59A/TUC-001.tif';
     parameters.interval = 0; % 相邻帧之间的死时间（秒）。曝光时间从 .sif 文件头读取，总帧间隔 = exposure + interval
@@ -39,12 +39,12 @@
     parameters.offset = 1893.68;
 
     % --- Windowing 参数 --- 
-    parameters.row_range = 512:1536;
-    parameters.col_range = 512:1536; % 裁切的行/列范围。应略大于最终裁剪的范围（如257*257）以保证 drift correction 有足够重叠，且尽量居中
+    parameters.row_range = (512+100):(1536-100);
+    parameters.col_range = (512+100):(1536-100); % 裁切的行/列范围。应略大于最终裁剪的范围（如257*257）以保证 drift correction 有足够重叠，且尽量居中
 
     % --- Detection/Localization 参数 ---
-    psf_estimated = 1.2; % pixel size
-    parameters.k_sigma = 5.5; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
+    psf_estimated = 1.2*16/(6.5*1.5); % pixel size
+    parameters.k_sigma = 4.5; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
     parameters.edge = ceil(psf_estimated*3.3-0.5); % 边缘防护宽度（像素）。距图像边缘 < edge 的 detection 将被跳过，避免 PSF 截断导致拟合失败
     parameters.viz_enabled = true; % 是否绘制 detection / localization 的叠加图
     parameters.viz_max_frames = 5000; % 可视化时最多显示的帧数（避免帧数过多导致绘图缓慢）
@@ -56,8 +56,8 @@
     parameters.drift_min_locs = 30;         % 每段最少定位数
 
     % --- Drift Correction 参数 ---
-    parameters.row_width = 501;
-    parameters.col_width = 501;
+    parameters.row_width = 301;
+    parameters.col_width = 301;
 
     % --- Emitter Analysis 参数 ---
     parameters.bleach_time = 10;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
@@ -85,7 +85,7 @@
     parameters.one_frame_time = parameters.ex_time + parameters.interval; % 计算单帧总时长（曝光 + 死时间），供后续使用
 
 %% Windowing
-    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:200);
+    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:50);
     parameters.frames = size(windowed_raw_data, 3);   % 记录总帧数，后续多处复用
     fprintf('Windowed Data: %d × %d × %d\n', ...
         size(windowed_raw_data,1), size(windowed_raw_data,2), parameters.frames);
@@ -101,7 +101,7 @@
 
 %% Viz
     figure;
-    viz.plotImage(windowed_raw_data, 1:10, 'hot','Drift-uncorrected Image and Detections');
+    viz.plotImage(windowed_raw_data, 100, 'hot','Drift-uncorrected Image and Detections');
     hold on;
 
 %% Hot Pixel Detection for Non-bleaching Particles
@@ -240,7 +240,7 @@
 %% Localization
     % 注：此步骤计算量大，建议完成后保存结果
     uncorrected_super_loc_total_raw = ...
-        localize.MLE1.locMolecules(windowed_raw_data, uncorrected_detected_total, parameters.edge,1); % 输出 7 列: [row, col, brightness, background, sigma, sigma_loc, frame], sigma_loc 即 CRLB 估计的定位不确定度（像素）
+        localize.LSQ1.locMolecules(windowed_raw_data, uncorrected_detected_total, parameters.edge,1); % 输出 7 列: [row, col, brightness, background, sigma, sigma_loc, frame], sigma_loc 即 CRLB 估计的定位不确定度（像素）
 
     % 过滤不合理的 localization（如负亮度、sigma 异常、位置跑出 ROI 等）
     uncorrected_super_loc_total = localize.filterBadLocs(uncorrected_super_loc_total_raw);
@@ -370,7 +370,7 @@
     min_frames = round(parameters.livetime_th / parameters.ex_time);
     emitters_filt = emitters;
     emitters_filt = postproc.emitter.filterEmitters_short(emitters_filt, min_frames, 'consecutive');
-    %emitters_filt = postproc.emitter.filterEmitters_firstframe(emitters_filt);
+    emitters_filt = postproc.emitter.filterEmitters_firstframe(emitters_filt);
     %emitters_filt = postproc.emitter.filterEmitters_end(emitters_filt);
     [emitters_filt, stats_jump] = postproc.emitter.filterEmitters_jumping( ...
         emitters_filt, parameters.jump_threshold);
@@ -394,6 +394,18 @@
         emitters_filt, parameters.frames, parameters.ex_time, parameters.interval, ...
         brightness, sigma, sigma_loc, background);
     postproc.emitter.plotEmitterStatistics(stats, 50);
+
+%% Joint distribution
+    % 创建图形窗口
+    figure('Name', '联合分布图', 'Position', [100, 100, 600, 500]);
+
+    % 绘制带边缘直方图的散点图
+    sh = scatterhistogram(stats.brightness_mean, stats.sigma_mean);
+
+    % 设置图表属性
+    sh.XLabel = 'Brightness Mean (pps)';
+    sh.YLabel = 'sigma_mean (px)';
+    sh.Title = 'Joint Distribution';
 
 %% Check Brightness in First Few Frames
     F = 10;
@@ -467,11 +479,11 @@
 
     % Create folder for saving selected traces
     [file_dir, file_base, ~] = fileparts(parameters.file_name);
-    selected_traces_dir = fullfile(file_dir, [file_base, '_selected_traces']);
+    selected_traces_dir = '';%fullfile(file_dir, [file_base, '_selected_traces']);
 
-    for index = 1:45
+    for index = 1:8
         postproc.emitter.checkTrace(start_frame, end_frame, parameters.ex_time, ...
-            stats.trace(index,:), stats.brightness_em(index,:), ...
+            stats.trace(index,:), stats.snr(index,:), ...
             stats.pos_matrix(:,1,index), stats.pos_matrix(:,2,index), ...
             'save_dir', selected_traces_dir, 'emitter_idx', index);
     end
@@ -565,9 +577,9 @@
     end
 
 %% Inspect Emitter Movie
-    postproc.emitter.checkMovie(5, data, emitters_filt, ...
+    postproc.emitter.checkMovie(1, data, emitters_filt, ...
         stats.pos_mean_px, stats.pos_matrix, parameters.one_frame_time, ...
-        'frameStep', 3, 'pauseTime', 0.005, 'clim', [0 130], 'preFrames', 100);
+        'frameStep', 1, 'pauseTime', 0.005, 'clim', [0 300], 'preFrames', 100, 'snr', stats.snr);
 
 %% Trace Avg
     traces = stats.trace;

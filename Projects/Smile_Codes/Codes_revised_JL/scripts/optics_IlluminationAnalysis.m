@@ -1,8 +1,8 @@
 %% Parameter settings
     clear all;clc;
 
-    file_name = '/Volumes/SMILeSSD/Optics/Ti2Tests/TirfModule/Cy3_polylys/20260616/poly_cy3_0.1s_200fm_1.66A_var/20260616-115551604/TUC-001.tif';
-    %file_name = '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3_polylys/20260616/532nm_1x_0p1S_100frames_0p33mW_poly_cy3_varill_fov1.sif';
+    file_name = '/Volumes/SMILeSSD/Optics/Ti2Tests/TirfModule/Cy3_polylys/20260622/poly_cy3_0.1s_200fm_1.77A/20260622-203103161/TUC-001.tif';
+    %file_name = '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3_polylys/20260622/532nm_1x_0p1S_200frames_0p33mW_poly_cy3_varill_fov1.sif';
     %file_name_filt = '/Volumes/SMILeSSD/Optics/Ti2Tests/TirfModule/Cy3_polylys/20260227_532_cy3_0.2s_1.82A_filter/TUC-002.tif';
     gain = 33.448; % DN/e-
     ex_time = 0.1;
@@ -46,7 +46,13 @@
     interval = 0; % time interval between two adjacent exposure. In unit of seconds.
     oneFrameTime = ex_time+interval;
     windowed_raw_data = raw_data;
-    
+
+%% Viz
+    figure;
+    viz.plotImage(windowed_raw_data, 150, 'hot','Mean Image (without filter)');
+    %figure;
+    %viz.plotImage(mean_raw_data_filt, 1, 'hot','Mean Image (with filtert)');
+
 %% Hot Pixel Detection for Non-bleaching Particles
     %  Key idea: hot pixel is single-pixel sharp; real particle is PSF-broadened
     %  Insert after Windowing, before MLE / trace extraction
@@ -166,7 +172,7 @@
     imagesc(corrected_avg); axis image; colorbar;
     title('After correction');
 
-%% Show time-domain var
+%% Show time-domain change
     % 假设 raw_data 大小为 2048 x 2048 x T
     [H, W, T] = size(windowed_raw_data);
     frame_rate = 10;
@@ -333,7 +339,7 @@
     % ==========================================
     % 策略2：中心 ROI 积分亮度（避免边界截断影响）
     % ==========================================
-    roi_size = round(200);  % 中心 200x200 像素 ROI
+    roi_size = round(100);  % 中心 200x200 像素 ROI
     roi_intensity = zeros(1, T);
     roi_std = zeros(1, T);
 
@@ -382,8 +388,9 @@
     grid on; box on;
 
     set(gca, 'FontSize', 11, 'LineWidth', 1.2);
+    
 %% avg
-    mean_raw_data = mean(windowed_raw_data(:,:,155:160),3);
+    mean_raw_data = mean(windowed_raw_data(:,:,1:30),3);
     %mean_raw_data_filt = mean(raw_data_filt(:,:,:),3);
 
 %% clear data
@@ -401,7 +408,7 @@
     viz.plotImage(log(F+1), 1, 'gray','Freq Domain');
 
 %% Lowpass Filter
-    L_est = imgaussfilt(mean_raw_data, 10);
+    L_est = imgaussfilt(mean_raw_data, 30);
     %L_est_filt = imgaussfilt(mean_raw_data_filt, 50);
     figure;
     viz.plotImage(L_est, 1, 'hot','Lowpassed Image (without filter)');

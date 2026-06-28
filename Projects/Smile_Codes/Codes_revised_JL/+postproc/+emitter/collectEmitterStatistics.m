@@ -48,6 +48,7 @@ function stats = collectEmitterStatistics(emitters,frames,ex_time,interval, ...
     stats.pos_mean_px       = pos_mean_px;
     stats.survival_sec      = survival_sec;
     stats.brightness_em = brightness_em;
+    stats.bg_em = bg_em;
     stats.bg_mean = mean(bg_em,2,'omitnan');
     stats.brightness_mean   = mean(brightness_em,2,'omitnan')/ex_time; % photon/sec
     stats.brightness_sum    = sum(brightness_em,2,'omitnan');

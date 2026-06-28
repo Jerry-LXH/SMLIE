@@ -8,6 +8,8 @@ addParameter(p, 'preFrames', 100);
 addParameter(p, 'postFrames', 300);
 addParameter(p, 'clim', [0 250]);
 addParameter(p, 'pauseTime', 0.01);  
+% 新增可选参数 snr，默认值为空
+addParameter(p, 'snr', []);  
 parse(p, varargin{:});
 opt = p.Results;
 
@@ -60,8 +62,26 @@ for i = firstfr:opt.frameStep:endfr
 
     hold(ax,'off');
 
-    title(ax, sprintf('Emitter %d, t = %.2f s', ...
-        index, (i-1)*oneFrameTime));
+    % 判断是否传入了 snr 参数
+    if ~isempty(opt.snr)
+        % 假设 snr 形状与 pos_matrix 相同 [frames x 2 x emitters]
+        % 我们取第1列的值作为当前帧的 SNR
+        current_snr = opt.snr(index,i); 
+        
+        if ~isnan(current_snr)
+            title_str = sprintf('Emitter %d, t = %.2f s, SNR = %.2f', ...
+                index, (i-1)*oneFrameTime, current_snr);
+        else
+            title_str = sprintf('Emitter %d, t = %.2f s, SNR = NaN', ...
+                index, (i-1)*oneFrameTime);
+        end
+    else
+        % 如果没有传入 snr，保持原来的标题格式
+        title_str = sprintf('Emitter %d, t = %.2f s', ...
+            index, (i-1)*oneFrameTime);
+    end
+    
+    title(ax, title_str);
 
     drawnow;
     pause(opt.pauseTime);   % <-- 使用控制参数
