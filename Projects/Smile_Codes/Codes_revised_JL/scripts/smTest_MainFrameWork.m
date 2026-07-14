@@ -30,7 +30,7 @@
 
     % --- 文件与 I/O ---
     parameters.file_name = ...
-        '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3/20260603/532nm_1x_0p1S_1000frames_1p00mW_cy3.sif';
+        '/Volumes/SMILeSSD/Optics/TE2000UTests/Cy3/20260703/532nm_1p5x_0p1S_500frames_1p1mW_cy3_fov1.sif';
     %parameters.file_name = ...
         %'/Volumes/SMILeSSD/Optics/TE2000UTests/beads/20260616/532nm_1x_0p1S_100frames_0p33mW_beads_varill_fov1.sif';
         
@@ -41,12 +41,12 @@
     %parameters.row_range = 203:448;
     %parameters.col_range = 257:502;
     %parameters.col_range = 1:246;
-    parameters.row_range = 100:412;
-    parameters.col_range = 100:412;
+    parameters.row_range = 100:412-10;
+    parameters.col_range = 100-15:412-15;
 
     % --- Detection/Localization 参数 ---
     psf_estimated = 1.1; % pixel size
-    parameters.k_sigma = 3.0; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
+    parameters.k_sigma = 2.5; % local maximum 检测阈值：像素值需超过局部背景 + k_sigma × 局部标准差才被标记为候选点
     parameters.edge = ceil(psf_estimated*3.3-0.5); % 边缘防护宽度（像素）。距图像边缘 < edge 的 detection 将被跳过，避免 PSF 截断导致拟合失败
     parameters.viz_enabled = true; % 是否绘制 detection / localization 的叠加图
     parameters.viz_max_frames = 5000; % 可视化时最多显示的帧数（避免帧数过多导致绘图缓慢）
@@ -59,11 +59,11 @@
     % --- Drift Correction ---
     %parameters.row_width = 233;
     %parameters.col_width = 233;
-    parameters.row_width = 200;
-    parameters.col_width = 200;
+    parameters.row_width = 200-50;
+    parameters.col_width = 200-50;
 
     % --- Emitter Analysis 参数 ---
-    parameters.bleach_time = 10;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
+    parameters.bleach_time = 1;            % 光漂白搜索窗口（秒），决定 emitter 聚类的时间跨度
     parameters.searching_radius = 2;        % emitter 聚类搜索半径（像素）
     parameters.livetime_th = 0.2;           % 最短存活时间阈值（秒），低于此值的 emitter 被过滤
     parameters.jump_threshold = 3.5;        % 位置跳跃过滤阈值（σ 倍数）
@@ -86,7 +86,7 @@
     parameters.one_frame_time = parameters.ex_time + parameters.interval; % 计算单帧总时长（曝光 + 死时间），供后续使用
 
 %% Windowing
-    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:1000);
+    windowed_raw_data = raw_data(parameters.row_range, parameters.col_range, 1:100);
     parameters.frames = size(windowed_raw_data, 3);   % 记录总帧数，后续多处复用
 
     fprintf('Windowed Data: %d × %d × %d\n', ...
@@ -104,7 +104,7 @@
 
 %% Viz
     figure;
-    viz.plotImage(windowed_raw_data, 1:500, 'hot','Drift-uncorrected Image and Detections');
+    viz.plotImage(windowed_raw_data, 1, 'hot','Drift-uncorrected Image and Detections');
     hold on;
 
 %% Detection (Roughly find locs)
