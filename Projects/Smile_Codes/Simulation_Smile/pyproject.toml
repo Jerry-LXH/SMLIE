@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simulation_smile"
+version = "0.1.0"
+description = "Composable microscope imaging simulator: optics/PSF, illumination, fluorophore photophysics, camera and noise."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.9",
+    "matplotlib>=3.6",
+    "tifffile>=2023.1",
+]
+
+[project.optional-dependencies]
+# GPU backends are optional; the core runs on numpy/scipy alone.
+gpu = ["cupy-cuda12x"]
+torch = ["torch"]
+dev = ["pytest>=7.0", "pyyaml>=6.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["simulation_smile*"]
