@@ -1,18 +1,7 @@
-"""Optics module: lens, pupil, Zernike aberrations, and PSF models."""
-from __future__ import annotations
+# 光学/PSF 模型: 基类 + 具体 PSF
+from .base import PSFModel
+from .gaussian import GaussianPSF
+from .circular import CircularAperturePSF
+from .calibrated import CalibratedPSF
 
-from .config import LensConfig, PSFConfig
-from .lens import PhaseMask, effective_pixel_size
-from .psf import GaussianPSF, PSFModel, PupilPSF
-from .pupil import Pupil
-
-__all__ = [
-    "LensConfig",
-    "PSFConfig",
-    "Pupil",
-    "PSFModel",
-    "PupilPSF",
-    "GaussianPSF",
-    "PhaseMask",
-    "effective_pixel_size",
-]
+__all__ = ["PSFModel", "GaussianPSF", "CircularAperturePSF", "CalibratedPSF"]

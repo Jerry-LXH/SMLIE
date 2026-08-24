@@ -1,7 +1,6 @@
-"""Illumination module: excitation light spatial profiles."""
-from __future__ import annotations
+# 照明模型: 基类 + 具体激发分布
+from .base import Illumination
+from .uniform import Uniform
+from .gaussian2d import Gaussian2D
 
-from .config import IlluminationConfig
-from .profiles import GaussianSpot, TIRF, UniformField
-
-__all__ = ["IlluminationConfig", "UniformField", "GaussianSpot", "TIRF"]
+__all__ = ["Illumination", "Uniform", "Gaussian2D"]
