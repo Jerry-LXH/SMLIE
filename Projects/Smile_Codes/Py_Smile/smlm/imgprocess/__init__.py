@@ -29,7 +29,8 @@ from .base import Transform, Pipeline
 from .preprocess import Crop, SelectFrames
 from .temporal import (BleachCorrect, DriftCorrector,
                        bleach_correct, apply_drift, TemporalMean)
-from .interp import FourierUpsample, fourier_zoom, fourier_upsample
+from .interp import (FourierUpsample, fourier_zoom, fourier_upsample,
+                     fourier_interp_2d, fourier_lateral)
 from .denoise import GaussianFilter
 from .dehotpixel import Dehotpixel, dehotpixel
 from .deconv import (RL3D, SparseDeconv, OtfReweight,
@@ -45,7 +46,8 @@ __all__ = [
     "Crop", "SelectFrames",
     "BleachCorrect", "DriftCorrector",
     "bleach_correct", "apply_drift",
-    "FourierUpsample", "fourier_zoom", "fourier_upsample","TemporalMean",
+    "FourierUpsample", "fourier_zoom", "fourier_upsample",
+    "fourier_interp_2d", "fourier_lateral", "TemporalMean",
     "GaussianFilter",
     "Dehotpixel", "dehotpixel",
     "RL3D", "SparseDeconv", "OtfReweight",

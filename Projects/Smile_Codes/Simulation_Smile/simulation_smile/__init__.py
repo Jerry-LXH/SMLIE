@@ -13,22 +13,24 @@
 """
 from .datatypes import EmitterSet, PhotonStream, SimulationResult, FieldOfView
 from .pipeline import SimulationPipeline
-from .sources import EmitterSource, Random2D, Random3D, SimpleRing2d, SimpleCircles2d
+from .sources import (EmitterSource, Random2D, Random3D, SimpleRing2d,
+                     SimpleCircles2d, SimpleLines, PairGrid)
 from .illumination import Illumination, Uniform, Gaussian2D
 from .photophysics import PhotophysicsModel, Static, Blinking
 from .optics import (PSFModel, GaussianPSF, CircularAperturePSF,
                      CalibratedPSF)
-from .detector import Detector, SimpleCMOS
+from .detector import Detector, SimpleCMOS, SimpleEMCCD
 
 __version__ = "0.1.0"
 
 __all__ = [
     "EmitterSet", "PhotonStream", "SimulationResult", "FieldOfView",
     "SimulationPipeline",
-    "EmitterSource", "Random2D", "Random3D", "SimpleRing2d", "SimpleCircles2d",
+    "EmitterSource", "Random2D", "Random3D", "SimpleRing2d", "SimpleCircles2d", "SimpleLines",
+    "PairGrid",
     "Illumination", "Uniform", "Gaussian2D",
     "PhotophysicsModel", "Static", "Blinking",
     "PSFModel", "GaussianPSF", "CircularAperturePSF", "CalibratedPSF",
-    "Detector", "SimpleCMOS",
+    "Detector", "SimpleCMOS", "SimpleEMCCD",
     "__version__",
 ]

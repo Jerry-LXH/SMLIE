@@ -53,7 +53,15 @@ class GaussianPSF(PSFModel):
             slices.append((r0, r1, c0, c1))
         return kernels, slices
 
-    def render(self, emitters, photon_frame, fov):
+    def render(self, emitters, photon_frame, fov, rng=None):
+        """把该帧光子按高斯 PSF 多项分布随机分配到像面, 返回 (C, H, W) 计数图。
+
+        对每个 emitter/通道的 N 个光子, 以截断窗口内归一化高斯核为类别概率做
+        Multinomial(N, p) 分配(逐光子落点), 得到的光子直方图即 shot noise 后的
+        像面; 取代旧的"期望值加权累加"。rng=None 时内部新建 default_rng()。
+        """
+        if rng is None:
+            rng = np.random.default_rng()
         img = np.zeros((self.n_channels, fov.height, fov.width))
         if emitters.n == 0:
             return img
@@ -72,6 +80,15 @@ class GaussianPSF(PSFModel):
             if R1 <= R0 or C1 <= C0:
                 continue
             k = kernels[i][R0 - r0:R1 - r0, C0 - c0:C1 - c0]
+            s = k.sum()
+            if s <= 0:
+                continue
+            p = k / s                              # 可见窗口内再归一化(能量守恒)
+            pflat = p.ravel()
             for c in range(self.n_channels):
-                img[c, R0:R1, C0:C1] += photon_frame[i, c] * k
+                n = int(round(photon_frame[i, c]))
+                if n <= 0:
+                    continue
+                counts = rng.multinomial(n, pflat).reshape(k.shape)
+                img[c, R0:R1, C0:C1] += counts
         return img

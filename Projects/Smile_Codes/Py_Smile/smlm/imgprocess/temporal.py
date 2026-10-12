@@ -57,9 +57,8 @@ class BleachCorrect(Transform):
     def __init__(self, mode="mono_exp"):
         self.mode = mode
 
-    def __call__(self, stack):
-        data = bleach_correct(np.asarray(stack.data, dtype=np.float32), self.mode)
-        return replace(stack, data=data)
+    def _apply(self, data):
+        return bleach_correct(np.asarray(data, dtype=np.float32), self.mode)
 
     def __repr__(self):
         return f"BleachCorrect(mode={self.mode!r})"
@@ -74,9 +73,8 @@ class TemporalMean(Transform):
     def __init__(self, dtype=np.float32):
         self.dtype = dtype
 
-    def __call__(self, stack):
-        data = np.asarray(stack.data, dtype=self.dtype).mean(axis=0, keepdims=True)
-        return replace(stack, data=data)
+    def _apply(self, data):
+        return np.asarray(data, dtype=self.dtype).mean(axis=0, keepdims=True)
 
     def __repr__(self):
         return f"TemporalMean(dtype={self.dtype.__name__})"
@@ -131,12 +129,16 @@ class DriftCorrector(Transform):
     """
 
     def __init__(self, trace=None, crop=None, edge=0, fill=0.0, order=1):
-        super().__init__()
         self.trace = trace          # 构造时可绑定 DriftTrace (Transform 用法)
         self.crop = crop
         self.edge = edge
         self.fill = fill
         self.order = order
+
+    def _apply(self, data):
+        raise TypeError(
+            "DriftCorrector 依赖 DriftTrace 逐帧轨迹(并同步校正定位), 不能对裸 ndarray "
+            "做鸭子调用; 请用 ImageStack 用法: DriftCorrector(trace=...)(stack)。")
 
     def __call__(self, stack):
         """Transform 接口: ImageStack -> ImageStack (需构造时绑定 trace)。"""

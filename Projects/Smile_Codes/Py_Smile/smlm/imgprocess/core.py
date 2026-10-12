@@ -157,21 +157,28 @@ def entromap(data, bin, maxv, minv):
     return out
 
 
-def xc_cumulant(data, order=1, offset=0.5):
+def xc_cumulant(data, order=1, offset=0.5, use_abs=True):
     """RIED 版交叉累积量 (对应 RIED 的 XCcumulant.m): (T,H,W) -> (2H,2W)。
 
-        cdata = |data - offset * mean_t(data)| ^ order
+        cdata = (data - offset * mean_t(data)) ^ order   (use_abs=True 时先取绝对值)
       (0,0): <cdata[t] * cdata[t+1]>_t                  —— 时间对
       (0,1): <cdata[i,j] * cdata[i,j+1]>                —— 水平对
       (1,0): <cdata[i,j] * cdata[i+1,j]>                —— 垂直对
       (1,1): (<cdata[i,j]cdata[i+1,j+1]> + <cdata[i+1,j]cdata[i,j+1]>)/2
+
+    use_abs=False: 不做 |·|, cdata 带符号。此时取 offset=1 (减全局时间均值) 时,
+      时间对 (0,0) 即去均值信号的滞后1协方差 —— 与 CumulantSofit(order=2, lags=(0,1))
+      基本一致 (仅差“全局均值 vs 各路独立中心化”)。空间对则保留相邻像素乘积(0-lag)。
 
     注意: 这是"偏移均值差 × 相邻像素乘积"的 0-lag 二阶统计量,
     **没有** XC-SOFI 那套平场校正 (RIED 原版如此)。
     """
     data = np.asarray(data, dtype=np.float32)          # (T,H,W)
     H, W = data.shape[1], data.shape[2]
-    cdata = np.abs(data - offset * data.mean(axis=0, keepdims=True)) ** order
+    cdata = data - offset * data.mean(axis=0, keepdims=True)
+    if use_abs:
+        cdata = np.abs(cdata)
+    cdata = cdata ** order
     out = np.zeros((2 * H, 2 * W), dtype=np.float32)
     out[0::2, 0::2] = np.mean(cdata[:-1, :, :] * cdata[1:, :, :], axis=0)       # 时间对
     out[0::2, 1:2 * W - 2:2] = np.mean(cdata[:, :, :-1] * cdata[:, :, 1:],

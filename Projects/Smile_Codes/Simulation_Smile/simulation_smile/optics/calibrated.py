@@ -127,12 +127,13 @@ class CalibratedPSF(PSFModel):
     # ------------------------------------------------------------------
     # 渲染 (与其它 PSF 一致)
     # ------------------------------------------------------------------
-    def render(self, emitters, photon_frame, fov):
-        """把该帧光子按实测 PSF 铺到像面, 返回 (C, H, W) 理想光子图。
+    def render(self, emitters, photon_frame, fov, rng=None):
+        """把该帧光子按实测 PSF 多项分布随机分配到像面, 返回 (C, H, W) 计数图。
 
         计划: 对每个 emitter 按其 xyz[:,2] 在 spline 上**直接**求值 FOV 像素
-        中心偏移处的核 (无需像 circular 的 z-grid 体积 + z 插值), 在局部窗口
-        内加权累加; 核按 emitter 身份缓存。
+        中心偏移处的核 (无需像 circular 的 z-grid 体积 + z 插值), 在局部窗口内
+        以归一化核为概率做 Multinomial 分配; 核按 emitter 身份缓存。
+        rng 语义与 GaussianPSF/CircularAperturePSF 一致。
         """
         raise NotImplementedError("CalibratedPSF.render 尚未实现")
 

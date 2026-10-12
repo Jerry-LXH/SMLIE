@@ -13,14 +13,17 @@ class Crop(Transform):
     def __init__(self, y=None, x=None):
         self.y, self.x = y, x
 
-    def __call__(self, stack):
+    def _apply(self, data):
         ys = slice(*self.y) if self.y else slice(None)
         xs = slice(*self.x) if self.x else slice(None)
+        return data[:, ys, xs]
+
+    def _wrap(self, stack, data):
         meta = dict(stack.metadata)
         # ⚠️ 记录裁剪偏移,定位坐标才能还原到相机原始坐标系
         meta['crop_offset'] = (self.y[0] if self.y else 0,
                                self.x[0] if self.x else 0)
-        return replace(stack, data=stack.data[:, ys, xs], metadata=meta)
+        return replace(stack, data=data, metadata=meta)
 
 
 class SelectFrames(Transform):
@@ -28,6 +31,5 @@ class SelectFrames(Transform):
     def __init__(self, start=0, stop=None, step=1):
         self.start, self.stop, self.step = start, stop, step
 
-    def __call__(self, stack):
-        data = stack.data[self.start:self.stop:self.step, :, :]
-        return replace(stack, data=data)
+    def _apply(self, data):
+        return data[self.start:self.stop:self.step]

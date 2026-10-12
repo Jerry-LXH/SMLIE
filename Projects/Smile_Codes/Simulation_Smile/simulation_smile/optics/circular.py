@@ -323,13 +323,17 @@ class CircularAperturePSF(PSFModel):
             slices.append((r0, r1, c0, c1))
         return kernels, slices
 
-    def render(self, emitters, photon_frame, fov):
-        """把该帧光子按 3D PSF 铺到像面, 返回 (C, H, W) 理想光子图。
+    def render(self, emitters, photon_frame, fov, rng=None):
+        """把该帧光子按 3D PSF 多项分布随机分配到像面, 返回 (C, H, W) 计数图。
 
         1. 解析 δz 网格并(按需)构建/复用缓存的过采样 PSF 体积;
         2. 逐 emitter 在 z 上插值 + xy 双线性插值得到像面局部核 (缓存于 xyz 身份);
-        3. 在局部窗口内以 photon_frame 加权累加 (参考 GaussianPSF.render)。
+        3. 对每个 emitter/通道的 N 个光子, 以局部窗口内归一化核为概率做
+           Multinomial(N, p) 分配, 累加计数(取代旧的期望值加权累加)。
+        rng=None 时内部新建 default_rng()。
         """
+        if rng is None:
+            rng = np.random.default_rng()
         img = np.zeros((self.n_channels, fov.height, fov.width))
         if emitters.n == 0:
             return img
@@ -354,7 +358,7 @@ class CircularAperturePSF(PSFModel):
             self._cache[key] = cached
         _, kernels, slices = cached
 
-        # 3. 局部窗口加权累加
+        # 3. 局部窗口多项分配累加
         H, W = fov.height, fov.width
         for i in range(emitters.n):
             r0, r1, c0, c1 = slices[i]
@@ -363,8 +367,17 @@ class CircularAperturePSF(PSFModel):
             if R1 <= R0 or C1 <= C0:
                 continue
             k = kernels[i][R0 - r0:R1 - r0, C0 - c0:C1 - c0]
+            s = k.sum()
+            if s <= 0:
+                continue
+            p = k / s                              # 可见窗口内再归一化(能量守恒)
+            pflat = p.ravel()
             for c in range(self.n_channels):
-                img[c, R0:R1, C0:C1] += photon_frame[i, c] * k
+                n = int(round(photon_frame[i, c]))
+                if n <= 0:
+                    continue
+                counts = rng.multinomial(n, pflat).reshape(k.shape)
+                img[c, R0:R1, C0:C1] += counts
         return img
 
     def clear_cache(self):

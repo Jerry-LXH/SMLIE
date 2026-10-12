@@ -5,7 +5,6 @@ sCMOS 传感器上少数像素有异常高的暗电流/增益 -> 逐帧出现"�
 RIED 原版做法: 整卷上 `data(data > thresh) = data(data > thresh) / divisor`。
 """
 from __future__ import annotations
-from dataclasses import replace
 import numpy as np
 from .base import Transform
 
@@ -35,9 +34,8 @@ class Dehotpixel(Transform):
         self.thresh = float(thresh)
         self.divisor = float(divisor)
 
-    def __call__(self, stack):
-        data = dehotpixel(stack.data, self.thresh, self.divisor)
-        return replace(stack, data=data)
+    def _apply(self, data):
+        return dehotpixel(data, self.thresh, self.divisor)
 
     def __repr__(self):
         return f"Dehotpixel(thresh={self.thresh:g}, divisor={self.divisor:g})"

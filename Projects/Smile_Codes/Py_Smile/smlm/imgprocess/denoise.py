@@ -4,7 +4,6 @@
 RIED 的第一步就是高斯预滤波 (sigma ~ 0.7 px) 抑制高频采样噪声。
 """
 from __future__ import annotations
-from dataclasses import replace
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from .base import Transform
@@ -19,14 +18,16 @@ class GaussianFilter(Transform):
     def __init__(self, sigma=0.7):
         self.sigma = float(sigma)
 
-    def __call__(self, stack):
+    def _apply(self, data):
         if self.sigma == 0:
-            return stack
-        data = np.asarray(stack.data, dtype=np.float32)
+            return np.asarray(data)              # sigma=0: 原样返回 (不cast)
+        data = np.asarray(data, dtype=np.float32)
+        if data.ndim == 2:
+            return gaussian_filter(data, self.sigma, mode='nearest')
         out = np.empty_like(data)
         for i in range(data.shape[0]):
             out[i] = gaussian_filter(data[i], self.sigma, mode='nearest')
-        return replace(stack, data=out)
+        return out
 
     def __repr__(self):
         return f"GaussianFilter(sigma={self.sigma})"

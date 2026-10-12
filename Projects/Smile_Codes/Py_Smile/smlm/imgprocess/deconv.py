@@ -41,9 +41,11 @@ def scalar_psf(shape, pixelsize, na, wavelength, z=0.0, nsub=2000):
       向量化、快 (与数值积分一致到 ~1e-13);
     - z≠0 (离焦): 退化为对 p∈[0,1] 的分块梯形数值积分 (nsub 采样数)。
 
-    ⚠️ 已知差异: matlab `Generate_PSF.m` 里有 `idx = s1 <= 1` (s1 为 nm 单位
-    半径), 实测会让 PSF 只剩中心 1 像素 (≈ delta, RL 退化为无操作)。本实现
-    **不复刻该掩膜**, 在全网格上积分, 得到真实的衍射 PSF。
+    ⚠️ 与 matlab `Generate_PSF` 的一致性: 经逐模块对照 (见 test_ried_vs_matlab.ipynb),
+    matlab 的 `idx = s1 <= 1` 掩膜中 s1 为**米**单位半径 (pixel 已 ×1e-9), 1 米阈值
+    实际放行全部像素, **不会塌缩成 delta**。焦面 (z=0) 本实现与 matlab kernel 逐像素
+    一致 (Pearson≈1.0)。注意其积分形式 ∫₀¹ J0(vp)dp **不带 ρ 权重** (并非教科书
+    Airy (2J1(v)/v)²), 两者在旁瓣处不同; 与 matlab 一致即已达标。
     """
     ny, nx = shape
     y = (np.arange(ny) - ny // 2) * pixelsize
@@ -151,7 +153,7 @@ def rl_deconv(data, psf, iterations):
 
 
 class RL3D(Transform):
-    """Richardson-Lucy 反卷积 Transform (逐帧应用)。
+    """Richardson-Lucy 反卷积 Transform (逐帧应用; 鸭子类型可直接喂 ndarray, 支持 2D/3D)。
 
     psf: 2D PSF 核 (RIED 里是 `kernel(pixel, wavelength, NA)` 生成的 PSF);
     iterations: 迭代次数 (RIED 的 iter1 / iter2)。
@@ -160,12 +162,18 @@ class RL3D(Transform):
         self.psf = np.asarray(psf, dtype=np.float32)
         self.iterations = int(iterations)
 
-    def __call__(self, stack):
-        data = np.asarray(stack.data, dtype=np.float32)
+    def _apply(self, data):
+        data = np.asarray(data, dtype=np.float32)
+
+        def _one(d):
+            return np.abs(rl_deconv(d, self.psf, self.iterations))
+
+        if data.ndim == 2:
+            return _one(data)
         out = np.empty_like(data)
         for i in range(data.shape[0]):
-            out[i] = np.abs(rl_deconv(data[i], self.psf, self.iterations))
-        return replace(stack, data=out)
+            out[i] = _one(data[i])
+        return out
 
     def __repr__(self):
         return f"RL3D(psf={self.psf.shape}, iterations={self.iterations})"
@@ -324,14 +332,20 @@ class SparseDeconv(Transform):
         self.scale = scale
         self.sigma_t = float(sigma_t)
 
-    def __call__(self, stack):
-        data = np.asarray(stack.data, dtype=np.float32)
+    def _apply(self, data):
+        data = np.asarray(data, dtype=np.float32)
+
+        def _one(d):
+            return sparse_deconv(d, self.mu, self.sigma_t, self.l10,
+                                 self.iter_bregman, self.psf,
+                                 self.iterations, self.scale)
+
+        if data.ndim == 2:
+            return _one(data)
         out = np.empty_like(data)
         for i in range(data.shape[0]):
-            out[i] = sparse_deconv(data[i], self.mu, self.sigma_t, self.l10,
-                                   self.iter_bregman, self.psf,
-                                   self.iterations, self.scale)
-        return replace(stack, data=out)
+            out[i] = _one(data[i])
+        return out
 
     def __repr__(self):
         return (f"SparseDeconv(fidelity={self.mu}, sparsity={self.l10}, "
@@ -352,6 +366,11 @@ class OtfReweight(Transform):
         self.na = float(na)
         self.wavelength = float(wavelength)
         self.eps = float(eps)
+
+    def _apply(self, data):
+        raise TypeError(
+            "OtfReweight 需要 ImageStack.pixel_size (nm/px) 才能构建频率轴; "
+            "ndarray 鸭子调用不支持。请喂 ImageStack 或在构造后设 .pixel_size。")
 
     def __call__(self, stack):
         ps = stack.pixel_size

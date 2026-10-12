@@ -32,8 +32,8 @@ class SimulationPipeline:
         # 使用 tqdm 包装 range(n_frames)，并添加描述文字
         for t in tqdm(range(n_frames), desc="Generating frames", unit="frame"):
             photon_frame = stream.counts[:, t, :]                # (N, C)
-            ideal = self.psf.render(emitters, photon_frame,      # 空间铺开
-                                    self.fov)
+            ideal = self.psf.render(emitters, photon_frame,      # 空间铺开(多项分配)
+                                    self.fov, rng)
             digital = self.detector.capture(ideal, rng)          # 相机
             images.append(digital)
         images = np.stack(images)                                # (T, C, H, W)
