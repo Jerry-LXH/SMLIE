@@ -1,40 +1,34 @@
-"""simulation_smile -- a composable microscope-imaging simulator.
+"""simulation_smile -- 可组合的显微镜成像模拟器。
 
-Architecture: **config + component + pipeline** (see README.md).
+结构对齐 py_smile/smlm:
+  - datatypes : 核心数据类型与全局约定 (nm / s / 光子)
+  - sources   : 发射体分布
+  - illumination : 激发分布
+  - photophysics : 光物理 (闪烁/漂白, 帧内 Gillespie)
+  - optics    : PSF 模型 (局部窗口渲染 + 核缓存)
+  - detector  : 相机模型
+  - pipeline  : SimulationPipeline 编排整条管线
 
-* Each imaging stage (optics/PSF, illumination, fluorophore photophysics,
-  camera, noise) is a component implementing the :class:`~core.base.Stage`
-  protocol and built from a config dataclass.
-* :class:`~pipeline.pipeline.SimulationPipeline` composes stages in a canonical
-  order and renders single frames or time-series movies.
-* Components register themselves by name (:mod:`core.registry`) for
-  config-driven assembly and parameter sweeps.
-
-Quick start
------------
->>> from simulation_smile import presets
->>> movie = presets.smlm_storm().render_movie(200)
-
-Or assemble manually:
-
->>> from simulation_smile import SimulationPipeline, configs as C
->>> from simulation_smile.optics import PupilPSF
->>> pipe = SimulationPipeline(grid=C.Grid(pixel_size=108e-9, size=64))
->>> pipe = pipe.with_optics(PupilPSF(C.PSFConfig(na=1.49)))
+随机数约定: 一律使用外部传入的 np.random.Generator, 模块内部绝不 seed。
 """
-from __future__ import annotations
-
-from . import configs, presets
-from .core import set_backend
-from .pipeline import Scene, SimulationPipeline
+from .datatypes import EmitterSet, PhotonStream, SimulationResult, FieldOfView
+from .pipeline import SimulationPipeline
+from .sources import EmitterSource, Random2D, Random3D, SimpleRing2d, SimpleCircles2d
+from .illumination import Illumination, Uniform, Gaussian2D
+from .photophysics import PhotophysicsModel, Static, Blinking
+from .optics import (PSFModel, GaussianPSF, CircularAperturePSF,
+                     CalibratedPSF)
+from .detector import Detector, SimpleCMOS
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "EmitterSet", "PhotonStream", "SimulationResult", "FieldOfView",
     "SimulationPipeline",
-    "Scene",
-    "configs",
-    "presets",
-    "set_backend",
+    "EmitterSource", "Random2D", "Random3D", "SimpleRing2d", "SimpleCircles2d",
+    "Illumination", "Uniform", "Gaussian2D",
+    "PhotophysicsModel", "Static", "Blinking",
+    "PSFModel", "GaussianPSF", "CircularAperturePSF", "CalibratedPSF",
+    "Detector", "SimpleCMOS",
     "__version__",
 ]
