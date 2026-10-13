@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from ..datatypes import Trace, StateInfo, StateResult
 import numpy as np

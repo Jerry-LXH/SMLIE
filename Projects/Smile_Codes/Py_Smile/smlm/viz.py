@@ -262,11 +262,20 @@ def _track_xy(em: Emitter):
     """从单个 Emitter 取出逐帧 (x, y) 坐标。字段名不同就改这里。"""
     return np.asarray(em.x, dtype=float), np.asarray(em.y, dtype=float)
 
+_PROJECTIONS = {'mean': np.mean, 'max': np.max,
+               'std': np.std, 'median': np.median}
+
+
 def _make_background(data, projection='mean', frame_idx=None):
     """把 data 归约成一张 2D 底图。
     data       : 3D 影片 (T,H,W) / 2D 图 / None
-    frame_idx  : 指定则直接取该帧原图, 忽略 projection
-    projection : 'mean' | 'max' | 'std' | 'median'  (data 为 3D 时生效)
+    frame_idx  : 选帧方式, 三者之一:
+                 None             -> 用 projection 汇总全部帧;
+                 int              -> 直接取该帧原图, 忽略 projection;
+                 slice / 索引数组  -> 先取出这些帧得到子影片, 再按 projection 汇总。
+                                    例如 slice(0, 200) / np.arange(0, 200) /
+                                    [0, 50, 99]; 只选中 1 帧时等价于取原图。
+    projection : 'mean' | 'max' | 'std' | 'median'  (需要汇总多帧时生效)
     """
     if data is None:
         return None
@@ -276,11 +285,23 @@ def _make_background(data, projection='mean', frame_idx=None):
         return arr.astype(float)
 
     if arr.ndim == 3:                      # 影片 → 压成一张
-        if frame_idx is not None:          # 用指定的原始帧
-            return arr[frame_idx].astype(float)
-        reducer = {'mean': np.mean, 'max': np.max,
-                   'std':  np.std,  'median': np.median}[projection]
-        return reducer(arr, axis=0).astype(float)
+        if frame_idx is not None:
+            if (isinstance(frame_idx, (int, np.integer))
+                    and not isinstance(frame_idx, bool)):
+                return arr[int(frame_idx)].astype(float)      # 单帧原图
+            # 注意: tuple 会被 numpy 当成多维下标 (arr[(1, 2)] == arr[1, 2]),
+            # 所以除 slice 外一律转成 ndarray 再做花式索引。
+            sel = frame_idx if isinstance(frame_idx, slice) \
+                else np.asarray(frame_idx)
+            sub = arr[sel]
+            if sub.ndim == 2:                                 # 只选中 1 帧
+                return sub.astype(float)
+            if sub.shape[0] == 0:
+                raise ValueError(
+                    f"frame_idx={frame_idx!r} 没有选中任何帧 "
+                    f"(影片共 {arr.shape[0]} 帧)。")
+            return _PROJECTIONS[projection](sub, axis=0).astype(float)
+        return _PROJECTIONS[projection](arr, axis=0).astype(float)
 
     raise ValueError(f"data 维度不支持: ndim={arr.ndim}")
 
@@ -294,7 +315,14 @@ def plot_trajectories(data, emitters, *, ax=None,
 
     data        : 原始影片 (T,H,W) 或单张图 (H,W) 或 None。
     projection  : data 为影片时的投影方式 'mean'/'max'/'std'/'median'。
-    frame_idx   : 指定则用该帧原图作底(优先于 projection)。
+    frame_idx   : 底图选帧方式(优先于整段投影):
+                  int            -> 直接用该帧原图作底;
+                  slice / 数组    -> 先取出这些帧, 再按 projection 汇总, 例如
+                                    slice(0, 200) / np.arange(0, 200) /
+                                    [0, 50, 99];
+                  None           -> 全部帧按 projection 汇总。
+                  注意 (100, 200) 意为"第 100 和第 200 两帧", 不是区间;
+                  要区间请用 slice(100, 201) 或 np.arange(100, 201)。
     color_by    : 'time'(每条轨迹沿时间渐变上色) / 'index' / 'none'。
     """
     # --- 先做底图, 才能据其尺寸决定 figsize (原代码在此处误用了未定义的 bg) ---
@@ -434,8 +462,48 @@ def plot_bleaching_summary(stats, figsize=(4.5, 4)):
     return fig, ax
 
 
+_PANEL_ORDER = ('intensity', 'bg', 'snr', 'blinking')
+
+
+def _resolve_panels(panels, has_bg, has_snr):
+    """把 panels 参数规整成有序的面板名元组(并按数据可用性过滤)。
+
+    'all'/None 属于"自动模式": 缺数据的面板静默跳过, 不打扰用户;
+    显式列出面板时, 若某个面板缺数据则给出提示。
+    """
+    if panels is None:
+        names, explicit = list(_PANEL_ORDER), False
+    elif isinstance(panels, str):
+        key = panels.strip().lower()
+        if key == 'all':
+            names, explicit = list(_PANEL_ORDER), False
+        elif key == 'trace':
+            names, explicit = ['intensity'], True
+        else:
+            names, explicit = [key], True
+    else:
+        names, explicit = list(panels), True
+
+    unknown = [n for n in names if n not in _PANEL_ORDER]
+    if unknown:
+        raise ValueError(
+            f"未知面板 {unknown}; 可用: 'all' / 'trace' / "
+            f"{list(_PANEL_ORDER)} 里的任意组合。")
+
+    keep = [n for n in _PANEL_ORDER if n in names]
+    dropped = [n for n in keep
+               if (n == 'bg' and not has_bg) or (n == 'snr' and not has_snr)]
+    if dropped and explicit:
+        print(f"  [warn] trace 里没有 {'/'.join(dropped)} 数据, 已跳过该面板。")
+    keep = [n for n in keep if n not in dropped]
+    if not keep:
+        raise ValueError("panels 解析后没有任何可绘制的面板。")
+    return tuple(keep)
+
+
 def check_trace(trace, emitter=None, ex_time=1.0, mle_brightness=None,
-                use_time=True, show_track=True, save_path=None):
+                use_time=True, show_track=True, frame_range=None,
+                panels='all', show_raw=True, title=True, save_path=None):
     """可视化单个 Emitter:强度/背景/SNR/闪烁 + 空间轨迹,合并为一张图。
 
     Parameters
@@ -455,6 +523,27 @@ def check_trace(trace, emitter=None, ex_time=1.0, mle_brightness=None,
         True -> 横轴为时间(s);False -> 横轴为帧号。
     show_track : bool
         是否绘制空间轨迹(需要 emitter)。
+    frame_range : tuple[int | None, int | None], optional
+        只展示指定帧号窗口(含两端),形如 (start, end)。
+        start / end 是 trace.frames 中的**帧号**(不是数组下标);任一端可为
+        None 表示该端不设限,例如 (1000, None) / (None, 2000) / (500, 800)。
+        默认 None 表示展示全部帧。
+        横轴沿用绝对帧号/时间(不重新归零);右侧轨迹图仍绘制完整轨迹。
+    panels : 'all' | 'trace' | sequence of str
+        要画哪些面板, 默认 'all' (= intensity + bg* + snr* + blinking,
+        * 表示 trace 里没有该数据就自动跳过)。
+        'trace' 等价于 ('intensity',), 只画强度曲线, 即"干净的 trace 图"。
+        也可显式列出, 例如 ('intensity', 'blinking');
+        绘制顺序固定为 intensity -> bg -> snr -> blinking。
+    show_raw : bool
+        是否在 intensity 面板里画 Raw 曲线, 默认 True。
+        想得到最简洁的信号图可设 False, 例如:
+        panels='trace', show_raw=False, show_track=False, title=False
+        此时只剩一条背景扣减后的 intensity 曲线。
+    title : bool | str
+        True(默认) -> 自动标题 "Emitter #id (frames a-b, n=N)";
+        False      -> 不画标题(配合 panels='trace' 得到最干净的图);
+        str        -> 用该字符串作为标题。
     save_path : str, optional
         若给定,保存整张图为该路径(.png)。
 
@@ -494,15 +583,51 @@ def check_trace(trace, emitter=None, ex_time=1.0, mle_brightness=None,
             print(f"  [warn] mle_brightness 长度 {mle_arr.size} 既不匹配 "
                   f"emitter.frame 也不匹配 trace.frames,已忽略。")
 
-    # ---- 面板数量(强度 + 闪烁 恒有;bg / snr 可选)----
-    has_bg = getattr(trace, "bg", None) is not None
-    has_snr = getattr(trace, "snr", None) is not None
-    n_rows = 2 + int(has_bg) + int(has_snr)
+    # ---- 可选通道(bg / snr)----
+    # 先取出序列, 便于下面统一按帧窗口裁剪。
+    bg = getattr(trace, "bg", None)
+    bg = None if bg is None else np.asarray(bg, dtype=float)
+    snr = getattr(trace, "snr", None)
+    snr = None if snr is None else np.asarray(snr, dtype=float)
 
-    # ---- 布局:左列时间序列(n_rows 行),右列轨迹(跨全高)----
+    # ---- 帧窗口裁剪(frame_range)----
+    # 只裁"显示用"的序列; 横轴沿用绝对帧号/时间, 不重新归零, 便于与全量对照。
+    if frame_range is not None:
+        try:
+            start, end = frame_range
+        except (TypeError, ValueError):
+            raise ValueError(
+                "frame_range 需要能解包成两项的 (start, end), "
+                "例如 (1000, 2000); 任一端可用 None 表示不设限。") from None
+        win = np.ones(frames.size, dtype=bool)
+        if start is not None:
+            win &= frames >= start
+        if end is not None:
+            win &= frames <= end
+        if not win.any():
+            raise ValueError(
+                f"frame_range={frame_range!r} 在 trace.frames "
+                f"[{frames[0]}, {frames[-1]}] 内没有选中任何帧。")
+        frames, raw, intensity = frames[win], raw[win], intensity[win]
+        x_axis, is_on = x_axis[win], is_on[win]
+        if mle is not None:
+            mle = mle[win]
+        if bg is not None:
+            bg = bg[win]
+        if snr is not None:
+            snr = snr[win]
+
+    # ---- 面板选择与布局 ----
+    has_bg = bg is not None
+    has_snr = snr is not None
+    panel_names = _resolve_panels(panels, has_bg, has_snr)
+    n_rows = len(panel_names)
+
+    # 布局: 左列时间序列(n_rows 行), 右列轨迹(跨全高)
     draw_track = show_track and emitter is not None
+    height = max(2.2 * n_rows, 2.8)
     if draw_track:
-        fig = plt.figure(figsize=(12, 2.2 * n_rows), constrained_layout=True)
+        fig = plt.figure(figsize=(12, height), constrained_layout=True)
         gs = GridSpec(n_rows, 2, figure=fig, width_ratios=[2, 1])
         axes = []
         for r in range(n_rows):
@@ -510,54 +635,54 @@ def check_trace(trace, emitter=None, ex_time=1.0, mle_brightness=None,
             axes.append(ax)
         axt = fig.add_subplot(gs[:, 1])
     else:
-        fig, axes = plt.subplots(n_rows, 1, figsize=(8, 2.2 * n_rows),
+        fig, axes = plt.subplots(n_rows, 1, figsize=(8, height),
                                  sharex=True, constrained_layout=True)
-        if n_rows == 1:
-            axes = [axes]
+        axes = [axes] if n_rows == 1 else list(axes)
         axt = None
 
-    fig.suptitle(f"Emitter #{trace.emitter_id}  "
-                 f"(frames {frames[0]}–{frames[-1]}, n={len(frames)})",
-                 fontsize=13, fontweight="bold")
-    row = 0
+    if title is True:
+        fig.suptitle(f"Emitter #{trace.emitter_id}  "
+                     f"(frames {frames[0]}–{frames[-1]}, n={len(frames)})",
+                     fontsize=13, fontweight="bold")
+    elif title:
+        fig.suptitle(str(title), fontsize=13, fontweight="bold")
 
-    # 1) 强度:raw / intensity / MLE 三条线
-    ax = axes[row]; row += 1
-    ax.plot(x_axis, raw, "-", color="0.35", lw=1.0, label="Raw")
-    ax.plot(x_axis, intensity, "-", color=(0, 0.447, 0.741), lw=1.5,
-            label="Intensity (bg-sub)")
-    if mle is not None:
-        ax.plot(x_axis, mle, "-", color=(0.85, 0.16, 0.55), lw=1.5,
-                marker=".", ms=4, label="MLE brightness")
-    ax.axhline(0, ls="--", color="0.6", lw=1.0)
-    ax.set_ylabel("Intensity")
-    ax.legend(loc="best", fontsize=9)
+    # ---- 逐面板绘制 ----
+    for row, panel in enumerate(panel_names):
+        ax = axes[row]
 
-    # 2) 背景(可选)
-    if has_bg:
-        ax = axes[row]; row += 1
-        ax.plot(x_axis, np.asarray(trace.bg, dtype=float), "-",
-                color=(0.85, 0.33, 0.10), lw=1.2)
-        ax.set_ylabel("Background\n(per px)")
+        if panel == 'intensity':            # raw / intensity / MLE
+            if show_raw:
+                ax.plot(x_axis, raw, "-", color="0.35", lw=1.0, label="Raw")
+            ax.plot(x_axis, intensity, "-", color=(0, 0.447, 0.741), lw=1.5,
+                    label="Intensity (bg-sub)")
+            if mle is not None:
+                ax.plot(x_axis, mle, "-", color=(0.85, 0.16, 0.55), lw=1.5,
+                        marker=".", ms=4, label="MLE brightness")
+            ax.axhline(0, ls="--", color="0.6", lw=1.0)
+            ax.set_ylabel("Intensity")
+            ax.legend(loc="best", fontsize=9)
 
-    # 3) SNR(可选)
-    if has_snr:
-        ax = axes[row]; row += 1
-        snr = np.asarray(trace.snr, dtype=float)
-        ax.plot(x_axis, snr, "-", color=(0.47, 0.67, 0.19), lw=1.2)
-        ax.axhline(0, ls="--", color="0.6", lw=0.8)
-        ax.set_ylabel("SNR")
+        elif panel == 'bg':
+            ax.plot(x_axis, bg, "-", color=(0.85, 0.33, 0.10), lw=1.2)
+            ax.set_ylabel("Background\n(per px)")
 
-    # 4) 闪烁模式(ON=1 的竖线)
-    ax = axes[row]
-    on_x = x_axis[is_on]
-    ax.vlines(on_x, 0, 1, color=(0, 0.447, 0.741), lw=1.0)
-    ax.plot(on_x, np.ones_like(on_x), ".", color=(0, 0.447, 0.741), ms=4)
-    ax.set_ylim(0, 1.2)
-    ax.set_yticks([0, 1])
-    ax.set_ylabel("Emitter ON")
-    ax.set_title(f"Blinking  (duty cycle = {is_on.mean():.2f})", fontsize=10)
-    ax.set_xlabel(x_label)
+        elif panel == 'snr':
+            ax.plot(x_axis, snr, "-", color=(0.47, 0.67, 0.19), lw=1.2)
+            ax.axhline(0, ls="--", color="0.6", lw=0.8)
+            ax.set_ylabel("SNR")
+
+        else:                               # 'blinking': ON=1 的竖线
+            on_x = x_axis[is_on]
+            ax.vlines(on_x, 0, 1, color=(0, 0.447, 0.741), lw=1.0)
+            ax.plot(on_x, np.ones_like(on_x), ".", color=(0, 0.447, 0.741), ms=4)
+            ax.set_ylim(0, 1.2)
+            ax.set_yticks([0, 1])
+            ax.set_ylabel("Emitter ON")
+            ax.set_title(f"Blinking  (duty cycle = {is_on.mean():.2f})",
+                         fontsize=10)
+
+    axes[-1].set_xlabel(x_label)
 
     # ---- 轨迹图(右列)----
     if draw_track:

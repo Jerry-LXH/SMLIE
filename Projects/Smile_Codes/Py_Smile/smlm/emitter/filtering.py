@@ -49,12 +49,44 @@ class MinDurationFilter(EmitterFilter):
 
 
 class FirstFrameFilter(EmitterFilter):
-    """剔除第一帧不存在的 emitter (只保留拍摄开始就已亮的)。"""
+    """保留"开始就已亮"的 emitter。
+
+    判定依据是 emitter 的首次出现帧 on_frame 是否落在指定帧号窗口内。
+
+    Parameters
+    ----------
+    frame_range : (start, end) | None
+        帧号窗口(含两端)。保留 on_frame ∈ [start, end] 的 emitter。
+        start / end 任一端可为 None 表示该端不设限, 例如:
+          (0, 10)     -> 前 10 帧内就亮的分子
+          (None, 50)  -> 50 帧及以前出现的分子
+          (5, None)   -> 第 5 帧及以后才出现的分子
+        None (默认) -> 沿用旧行为: 以数据中最小的 on_frame 为界。
+    """
+    def __init__(self, frame_range=None):
+        self.frame_range = frame_range
+
     def keep(self, emitters):
         if not emitters:
             return np.array([], bool)
-        first = min(e.on_frame for e in emitters)
-        return np.array([e.on_frame == first for e in emitters])
+        on = np.array([e.on_frame for e in emitters], dtype=int)
+
+        if self.frame_range is None:                     # 向后兼容: 只保留最早出现的
+            return on == on.min()
+
+        try:
+            start, end = self.frame_range
+        except (TypeError, ValueError):
+            raise ValueError(
+                "frame_range 需要能解包成两项的 (start, end), "
+                "例如 (0, 10); 任一端可用 None 表示不设限。") from None
+
+        m = np.ones(on.size, bool)
+        if start is not None:
+            m &= on >= start
+        if end is not None:
+            m &= on <= end
+        return m
 
 
 class EccentricityFilter(EmitterFilter):
