@@ -2,6 +2,7 @@
 from .base import RawDataset, Loader
 from .sif import SIFLoader
 from .tif import TIFLoader, save_tif
+from .video import save_movie, auto_clim
 from .cache import run_cached, save_locs, load_locs, result_path
 
 _LOADERS = {'sif': SIFLoader, 'tif': TIFLoader, 'tiff': TIFLoader}
@@ -16,4 +17,4 @@ def load_raw(path, interval=1) -> RawDataset:
     return loader().load(path, interval)
 
 
-__all__ = ['RawDataset', 'Loader', 'SIFLoader', 'TIFLoader', 'load_raw','save_tif','run_cached', 'save_locs', 'load_locs', 'result_path']
+__all__ = ['RawDataset', 'Loader', 'SIFLoader', 'TIFLoader', 'load_raw','save_tif','save_movie','auto_clim','run_cached', 'save_locs', 'load_locs', 'result_path']

@@ -5,15 +5,31 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.gridspec import GridSpec
 
-def _resolve_frames(stack, frames):
-    """把 frames 参数规整成整数数组。None -> 全部帧。"""
-    n = stack.n_frames
+def _resolve_frames(stack, frames, stride=1):
+    """把 frames 参数规整成整数数组(相对 data 的帧下标)。None -> 全部帧。
+
+    frames 可为 int / 列表 / range / slice / 布尔掩码; stride>1 时再等间隔抽帧。
+    """
+    n = int(stack.n_frames)
     if frames is None:
-        return np.arange(n)
-    frames = np.atleast_1d(np.asarray(frames, dtype=int))
-    if np.any((frames < 0) | (frames >= n)):
-        raise IndexError(f"帧索引越界, 合法范围 [0, {n-1}]")
-    return frames
+        idx = np.arange(n)
+    elif isinstance(frames, slice):
+        idx = np.arange(n)[frames]
+    else:
+        sel = np.asarray(frames)
+        if sel.dtype == bool:
+            if sel.size != n:
+                raise ValueError(f"布尔掩码长度 {sel.size} 与帧数 {n} 不一致。")
+            idx = np.flatnonzero(sel)
+        else:
+            idx = np.atleast_1d(sel).astype(int)
+    if idx.size and (idx.min() < 0 or idx.max() >= n):
+        raise IndexError(f"帧索引越界, 合法范围 [0, {n - 1}]")
+    if int(stride) > 1:
+        idx = idx[::int(stride)]
+    if idx.size == 0:
+        raise ValueError("frames / stride 选完没有任何帧。")
+    return idx
 
 
 def average_frames(stack, frames=None):
@@ -410,6 +426,178 @@ def plot_trajectories(data, emitters, *, ax=None,
     ax.set_title(f"Trajectories (N={len(emitters)})")
     fig.tight_layout()
     return fig, ax
+
+_CENTER_FUNCS = {'median': np.median, 'mean': np.mean,
+                 'first': lambda a: a[0], 'last': lambda a: a[-1]}
+
+
+def emitter_roi(stack, emitter, half=10, frames=None, stride=1, center='median'):
+    """取以 emitter 为中心的"单分子窗口"影片, 返回 ImageStack。
+
+    结果可直接喂给 ``smlm.io.save_movie`` 导出 mp4。返回的 metadata 里带了
+    ``crop_offset``(y0, x0) 和 ``source_frames``(原始帧号), 所以 save_movie 会
+    自动把 overlay 的定位点平移到窗口坐标, 并按原始帧号对齐。
+
+    Parameters
+    ----------
+    half : int
+        半窗宽, 窗口尺寸是 (2*half+1)^2 像素。
+    frames : None | int | slice | 序列 | 布尔掩码
+        帧选择, 语义同 save_movie; None = 全部帧。
+    stride : int
+        在 frames 之上再等间隔抽帧。
+    center : 'median' | 'mean' | 'first' | 'last'
+        窗口中心取 emitter 轨迹的哪个位置, 默认 'median'(抗离群点)。
+    """
+    from dataclasses import replace
+    from .imgprocess import Crop
+
+    if center not in _CENTER_FUNCS:
+        raise ValueError(f"center 只支持 {list(_CENTER_FUNCS)}, 收到 {center!r}。")
+    nf, h, w = stack.data.shape
+    side = 2 * int(half) + 1
+    if side > min(h, w):
+        raise ValueError(f"窗口 {side}x{side} 比图像 {h}x{w} 还大, 请调小 half。")
+
+    f = _CENTER_FUNCS[center]
+    cx = int(round(float(f(np.asarray(emitter.x, dtype=float)))))
+    cy = int(round(float(f(np.asarray(emitter.y, dtype=float)))))
+    x0 = max(0, min(cx - int(half), w - side))     # 贴边时整体平移, 不缩窗
+    y0 = max(0, min(cy - int(half), h - side))
+
+    roi = Crop(y=(y0, y0 + side), x=(x0, x0 + side))(stack)
+    idx = _resolve_frames(stack, frames, stride)
+    meta = dict(roi.metadata)
+    meta['source_frames'] = idx                    # 原始帧号, 给 save_movie 对齐用
+    return replace(roi, data=roi.data[idx], metadata=meta)
+
+
+def _as_index_list(idx, n):
+    """把 idx 规整成整数列表。None -> 全部; 支持 int / slice / 序列 / 布尔掩码。"""
+    if idx is None:
+        return list(range(n))
+    if isinstance(idx, (int, np.integer)) and not isinstance(idx, bool):
+        idx = [int(idx)]
+    elif isinstance(idx, slice):
+        idx = list(range(n))[idx]
+    else:
+        sel = np.atleast_1d(np.asarray(idx))
+        if sel.dtype == bool:
+            if sel.size != n:
+                raise ValueError(f"布尔掩码长度 {sel.size} 与 emitter 数 {n} 不一致。")
+            sel = np.flatnonzero(sel)
+        idx = [int(v) for v in sel]
+    bad = [i for i in idx if i < 0 or i >= n]
+    if bad:
+        raise IndexError(f"emitter 序号越界 {bad}, 合法范围 [0, {n - 1}]。")
+    return idx
+
+
+def show_emitter_movies(stack, emitters, idx=None, half=10, frames=None,
+                        stride=None, fps=20, overlay=True, ncols=6, size=1.6,
+                        cmap='gray', percentile=(0.1, 99.9), clim=None,
+                        max_frames=100, dpi=80, marker_kw=None):
+    """内联播放若干 emitter 的"单分子窗口"小视频, 用来人工挑选。
+
+    每个 emitter 一个窗口子图, 全部同步播放。返回 IPython.display.Image
+    (动图), 把它放在 cell 最后一行即可在 notebook 里显示。
+    挑好之后用 ``emitter_roi`` + ``smlm.io.save_movie`` 导出成 mp4。
+
+    Parameters
+    ----------
+    idx : None | int | slice | 序列
+        要看哪些 emitter。None = 全部(emitters 可能很多, 建议显式给一段)。
+    half, frames : 见 ``emitter_roi``。
+    stride : int, optional
+        在 frames 上再抽帧。默认 None -> 自动抽到不超过 max_frames 帧,
+        免得内联动图过大。
+    fps : float
+        notebook 里的预览播放帧率(只影响预览, 与导出无关)。
+    overlay : bool
+        是否叠加该 emitter 的定位点。
+    ncols : int
+        每行排几个窗口。
+    max_frames : int
+        stride=None 时自动抽帧的上限。
+    """
+    import io as _io
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from PIL import Image as _PILImage
+    from IPython.display import Image as _IPyImage
+
+    idxs = _as_index_list(idx, len(emitters))
+    if not idxs:
+        raise ValueError("idx 没有选中任何 emitter。")
+
+    if stride is None:                       # 自动抽帧, 控制动图体积
+        n_all = _resolve_frames(stack, frames).size
+        stride = max(1, int(np.ceil(n_all / max(1, int(max_frames)))))
+    rois = [emitter_roi(stack, emitters[i], half=half, frames=frames,
+                        stride=stride) for i in idxs]
+
+    n, nf = len(rois), rois[0].data.shape[0]
+    side = rois[0].data.shape[1]
+    if clim is None:
+        pick = slice(None, None, max(1, nf // 5))      # 抽几帧估灰度范围即可
+        sample = np.concatenate([r.data[pick].ravel() for r in rois])
+        vmin, vmax = (float(v) for v in np.percentile(sample, percentile))
+        if vmax <= vmin:
+            vmax = vmin + 1.0
+    else:
+        vmin, vmax = float(clim[0]), float(clim[1])
+
+    kw = dict(c='r', marker='x', s=14, linewidths=0.5)
+    kw.update(marker_kw or {})
+
+    nrows = int(np.ceil(n / ncols))
+    fig = Figure(figsize=(size * min(n, ncols), size * nrows), dpi=dpi)
+    canvas = FigureCanvasAgg(fig)
+
+    ims, scs, pts_by_frame = [], [], []
+    for k, roi in enumerate(rois):
+        ax = fig.add_subplot(nrows, ncols, k + 1)
+        ax.set_title(f"#{idxs[k]}", fontsize=7, pad=2)
+        ax.set_xticks([]); ax.set_yticks([])
+        ims.append(ax.imshow(np.zeros((side, side)), cmap=cmap, vmin=vmin,
+                             vmax=vmax, origin='upper',
+                             interpolation='nearest'))
+        scs.append(ax.scatter([], [], **kw) if overlay else None)
+        ax.set_xlim(-0.5, side - 0.5)          # 建好 scatter 后再锁范围
+        ax.set_ylim(side - 0.5, -0.5)
+
+        bucket = {}
+        if overlay:
+            em = emitters[idxs[k]]
+            oy, ox = roi.metadata['crop_offset']
+            xs = np.asarray(em.x, dtype=float) - ox
+            ys = np.asarray(em.y, dtype=float) - oy
+            pos = {int(f): j for j, f in enumerate(roi.metadata['source_frames'])}
+            for t, f in enumerate(np.asarray(em.frame).astype(int)):
+                j = pos.get(int(f))
+                if j is not None:
+                    bucket.setdefault(j, []).append((xs[t], ys[t]))
+        pts_by_frame.append(bucket)
+
+    def _grab(j):
+        for k, roi in enumerate(rois):
+            ims[k].set_data(roi.data[j])
+            if scs[k] is not None:
+                pts = pts_by_frame[k].get(j)
+                scs[k].set_offsets(np.empty((0, 2)) if pts is None
+                                   else np.asarray(pts, dtype=float))
+        canvas.draw()
+        return np.asarray(canvas.buffer_rgba())[..., :3].copy()
+
+    pil = [_PILImage.fromarray(_grab(j)) for j in range(nf)]
+    buf = _io.BytesIO()
+    pil[0].save(buf, format='GIF', save_all=True, append_images=pil[1:],
+                duration=max(20, int(round(1000.0 / max(float(fps), 1e-6)))),
+                loop=0, optimize=True)
+    print(f"[viz] 预览 {n} 个 emitter x {nf} 帧 (stride={stride}), "
+          f"窗口 {side}x{side}, GIF {len(buf.getvalue()) / 1e6:.2f} MB")
+    return _IPyImage(data=buf.getvalue(), format='gif')
+
 
 _STAT_FIELDS = {
     'survival_sec':    ('Survival time',      's'),
