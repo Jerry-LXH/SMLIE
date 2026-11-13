@@ -16,13 +16,25 @@ def result_path(src_path, suffix='.locs.npz'):
     base, _ = os.path.splitext(src_path)
     return base + suffix
 
-def data_fingerprint(stack):
-    """对输入 ImageStack 算内容指纹: 覆盖一切上游改动(preprocess/camera)。"""
-    arr = np.ascontiguousarray(stack.data)
+def data_fingerprint(stack, n_probe=32):
+    """对输入 ImageStack 算内容指纹: 覆盖一切上游改动(preprocess/camera)。
+
+    只对 ``n_probe`` 帧(等间隔, 含首末帧)做全量哈希, 不全量哈希整个栈。
+    原因: 全量要把跨步的裁切视图先 copy 成连续数组(2000x312x228 float64 = 1.1 GB),
+    在 notebook 里实测单次 110 s —— 缓存**命中**也要付这个钱, 完全得不偿失。
+    抽样仍能发现 gain / crop / 帧窗 / 相机参数 这类上游改动。
+    """
+    arr = np.asarray(stack.data)
     h = hashlib.blake2b(digest_size=16)
     h.update(str(arr.shape).encode())
     h.update(str(arr.dtype).encode())
-    h.update(arr.tobytes())                      # 全量哈希, 最可靠
+    n = int(arr.shape[0]) if arr.ndim >= 1 else 0
+    if n > 0:
+        k = int(min(max(1, int(n_probe)), n))
+        idx = np.unique(np.linspace(0, n - 1, k).round().astype(int))
+        h.update(np.ascontiguousarray(arr[idx]).tobytes())
+    else:
+        h.update(np.ascontiguousarray(arr).tobytes())
     # 可读的上游元信息也一并纳入(便于排查, 也防纯 metadata 改动)
     h.update(json.dumps(describe(stack.metadata),
                         sort_keys=True, default=str).encode())

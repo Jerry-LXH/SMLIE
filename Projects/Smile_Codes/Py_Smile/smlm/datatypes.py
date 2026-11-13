@@ -33,6 +33,166 @@ class ImageStack:
 
 
 @dataclass
+class MultiImageStack:
+    """多通道图像栈:各通道已裁到**同一物理窗口**,共用参考通道坐标系。
+
+    为什么不直接给 ImageStack 加一个通道维:
+        ``localize``(``extract_rois`` 按 ``data[f, ...]`` 取帧)、``imgprocess``
+        (Crop / Pipeline / DriftCorrector 全按 ``(T,H,W)``)、``viz`` 都硬编码了
+        "(T,H,W), 第 0 维是帧"。加一维会让 ``n_frames`` 静默变成通道数, 属于
+        最坏的一类破坏。所以单独一个类。
+
+    与单通道流程的衔接:
+        ``channel(ch)`` 返回 ``data[i]`` 的**视图**包成的 ImageStack,
+        因此 detect / localize / Crop / DriftCorrector / viz 全部可直接复用,
+        定位输出仍是标准 ``Localizations``。
+
+    坐标约定:
+        - ``data`` : (C, T, H, W), 第 0 维是**通道**。
+        - ``offsets[c] = (row, col)``: 该通道窗口左上角在**探测器坐标**里的位置。
+          窗口是按参考通道定义的同一物理区域, 所以两通道 offsets 之差就是
+          通道间的粗偏移(≈ split_x)。
+        - 各通道自己的 local 坐标仍从 0 开始, 与 ImageStack 完全一致。
+        - 通道之间的**精细**对应关系存在 ``reg``: ``{ch: DualViewCalibration}``,
+          参考通道是恒等映射, 因此不在字典里。
+    """
+    data: np.ndarray                                  # (C, T, H, W) 光子数
+    channels: list[str] = field(default_factory=lambda: ['g', 'r'])
+    reference: int = 0                                # 参考通道索引, 恒等
+    reg: dict = field(default_factory=dict)           # {ch: 变换对象}, 参考通道无
+    offsets: np.ndarray = None                        # (C,2) 窗口左上角 (row, col)
+    pixel_size: float = None
+    metadata: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.data = np.asarray(self.data)
+        if self.data.ndim != 4:
+            raise ValueError('MultiImageStack.data 必须是 (C,T,H,W), '
+                             f'得到 {self.data.shape}')
+        if len(self.channels) != self.data.shape[0]:
+            raise ValueError(f'通道名 {len(self.channels)} 个, 但 data 的 C = '
+                             f'{self.data.shape[0]}')
+        if not 0 <= int(self.reference) < len(self.channels):
+            raise ValueError(f'reference = {self.reference} 越界')
+        self.reference = int(self.reference)
+        if self.offsets is not None:
+            self.offsets = np.asarray(self.offsets, dtype=int).reshape(-1, 2)
+            if self.offsets.shape[0] != len(self.channels):
+                raise ValueError(f'offsets 需要 {len(self.channels)} 行, '
+                                 f'得到 {self.offsets.shape[0]}')
+
+    # ---------- 基本属性 ----------
+    @property
+    def n_channels(self): return len(self.channels)
+
+    @property
+    def n_frames(self): return self.data.shape[1]
+
+    @property
+    def shape(self): return self.data.shape           # (C, T, H, W)
+
+    @property
+    def ref_name(self): return self.channels[self.reference]
+
+    # ---------- 通道访问 ----------
+    def index(self, ch) -> int:
+        """通道名(或索引) -> 通道索引。"""
+        if isinstance(ch, (int, np.integer)):
+            i = int(ch)
+            if not 0 <= i < self.n_channels:
+                raise IndexError(f'通道索引 {i} 越界')
+            return i
+        try:
+            return list(self.channels).index(ch)
+        except ValueError:
+            raise KeyError(f'未知通道 {ch!r}, 可选 {self.channels}') from None
+
+    def channel(self, ch) -> ImageStack:
+        """取单个通道, 返回 ImageStack **视图**(不拷贝)。
+
+        metadata 里补上通道名与该通道窗口在探测器上的偏移, 与 ``Crop``
+        写在 ``crop_offset`` 里的语义一致, 下游坐标换算可直接复用。
+        """
+        i = self.index(ch)
+        off = ((0, 0) if self.offsets is None
+               else tuple(int(v) for v in self.offsets[i]))
+        meta = dict(self.metadata)
+        meta.update({'channel': self.channels[i],
+                     'multi': True,
+                     'crop_offset': off})
+        return ImageStack(data=self.data[i], pixel_size=self.pixel_size,
+                          metadata=meta)
+
+    def channel_offset(self, ch) -> tuple[int, int]:
+        """该通道窗口左上角在探测器坐标里的 (row, col)。"""
+        if self.offsets is None:
+            return (0, 0)
+        return tuple(int(v) for v in self.offsets[self.index(ch)])
+
+    # ---------- 坐标层: 通道 local -> 参考通道 local ----------
+    def geometry(self, margin=None, check_coverage=True, strict=False):
+        """构造 ``DualViewGeometry``(分析窗口 = offsets, 配准 = ``reg``)。
+
+        这是本类与坐标层的**唯一**接口: 窗口原点、各通道配准、标定 roi 都汇总在
+        这里, 下游(漂移估计 / 定位搬运 / 叠图)因此不用再手传一堆偏移量。
+        """
+        from .multiplex.coords import DualViewGeometry
+        _, _, h, w = self.data.shape
+        offs = (np.zeros((len(self.channels), 2), int) if self.offsets is None
+                else np.asarray(self.offsets, int))
+        windows = {ch: (int(offs[i, 0]), int(offs[i, 1]), int(h), int(w))
+                   for i, ch in enumerate(self.channels)}
+        roi_d = (self.metadata or {}).get('roi')
+        roi_d = roi_d if isinstance(roi_d, dict) else None
+        return DualViewGeometry(
+            windows=windows, calib=dict(self.reg or {}),
+            reference=self.ref_name, roi=roi_d,
+            margin=int(margin if margin is not None
+                       else (roi_d or {}).get('margin', 0)),
+            check_coverage=check_coverage, strict=strict)
+
+    def to_reference(self, xy, ch) -> np.ndarray:
+        """该通道 local 坐标 -> **参考通道** local 坐标(含窗口与标定偏移)。
+
+        注意这里只做**坐标**变换, 不动像素 —— 亚像素配准由坐标承载, 图像只做
+        整体平移(漂移校正)。
+        """
+        if ch == self.ref_name:
+            return np.asarray(xy, float).reshape(-1, 2).copy()
+        return self.geometry(check_coverage=False).to_reference(xy, ch)
+
+    # ---------- 派生 ----------
+    def subset(self, channels) -> 'MultiImageStack':
+        """取若干通道(保持给定顺序), reference 随之重新定位。"""
+        idx = [self.index(c) for c in channels]
+        names = [self.channels[i] for i in idx]
+        if self.ref_name not in names:
+            raise ValueError(f'通道子集必须包含参考通道 {self.ref_name!r}')
+        offs = None if self.offsets is None else np.asarray(self.offsets)[idx]
+        return MultiImageStack(
+            data=self.data[idx], channels=names,
+            reference=names.index(self.ref_name),
+            reg={c: v for c, v in self.reg.items() if c in names},
+            offsets=offs, pixel_size=self.pixel_size,
+            metadata=dict(self.metadata))
+
+    def with_data(self, data, offsets=None,
+                  metadata=None) -> 'MultiImageStack':
+        """换掉像素(例如漂移校正后), 通道/配准/元数据保持一致。"""
+        return MultiImageStack(
+            data=data, channels=list(self.channels), reference=self.reference,
+            reg=dict(self.reg),
+            offsets=self.offsets if offsets is None else offsets,
+            pixel_size=self.pixel_size,
+            metadata=dict(self.metadata) if metadata is None else dict(metadata))
+
+    def __repr__(self):
+        c, t, h, w = self.data.shape
+        return (f'MultiImageStack(C={c}, T={t}, H={h}, W={w}, '
+                f'channels={self.channels}, ref={self.ref_name!r})')
+
+
+@dataclass
 class Candidates:
     """检测输出:整数像素级候选点。"""
     frame: np.ndarray                # int
