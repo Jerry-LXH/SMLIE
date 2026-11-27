@@ -279,7 +279,7 @@ smlm/
 | `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验） |
 | `datatypes.py` | `StepEvent` / `FretResult` / `CRITERIA` / `CRITERIA_STRICT` / `passed`：FRET 专用类型与判据名 |
 | `io.py` | `save_csv`（逐分子） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
-| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（只做编排，写表在 `io`、画图在 `viz`）；`FILES` 是对外承诺的文件名 |
+| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 就不写未筛选的那张表）；只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名 |
 | `viz.py` | `plot_pair` / `plot_pair_gallery`（含 `which='kept'/'rejected'`）/ `plot_gamma` / `plot_efficiency` / `plot_efficiency_vs_brightness` |
 
 ---

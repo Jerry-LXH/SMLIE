@@ -133,6 +133,16 @@ def test_save_bundle_without_any_kept_pair_skips_the_gallery(tmp_path):
     assert 'traces_all' in written                  # 未筛选的照旧要留
 
 
+def test_save_bundle_can_skip_the_unfiltered_table(tmp_path):
+    td, ta = _channels()
+    written = fr.save_bundle(tmp_path, records=_records(), results=_results(),
+                             traces_d=td, traces_a=ta, cal=_cal(),
+                             ex_time=EX, include_all=False, verbose=False)
+    assert 'traces_all' not in written
+    assert not os.path.exists(tmp_path / fr.FILES['traces_all'])
+    assert 'traces_good' in written              # 合格的仍然要留
+
+
 def test_save_traces_csv_reads_bg_flux_from_the_trace(tmp_path):
     """回归: 曾经去读 trace.meta, 而 Trace 早已没有 meta 字段。"""
     td, ta = _channels(1)

@@ -37,7 +37,7 @@ _E_MED = 'E 中位 {med:.3f} (n={n})'
 
 
 def save_bundle(out_dir, *, records, results, traces_d, traces_a, cal=None,
-                ex_time=1.0, title='', dpi=300, ncols=6,
+                ex_time=1.0, title='', dpi=300, ncols=6, include_all=True,
                 pre_win=100, post_win=400, verbose=True):
     """把一个视野的成品整体写进 ``out_dir`` (不存在就建)。
 
@@ -55,6 +55,9 @@ def save_bundle(out_dir, *, records, results, traces_d, traces_a, cal=None,
         每帧秒数 (csv 的 ``t_s`` 与图的横轴都用它)。
     title : str
         图标题前缀 (通常是 sif 文件名)。
+    include_all : bool
+        是否连**未筛选**的 ``traces_all.csv`` 一起写。一个 760 分子 x 2000 帧的
+        视野大约 76 MB, 只关心合格分子时关掉能省一大截。
 
     Returns
     -------
@@ -74,7 +77,7 @@ def save_bundle(out_dir, *, records, results, traces_d, traces_a, cal=None,
     # ---- 1) 全帧长表: 全部 trace / 合格 trace ----
     n_frames = min((len(t.intensity) for t in traces_d), default=0)
     t_s = np.arange(n_frames) * float(ex_time)
-    if traces_d:
+    if traces_d and include_all:
         written['traces_all'] = save_traces_csv(
             traces_d, traces_a, t_s, path('traces_all'), verbose=False)
 
