@@ -10,6 +10,17 @@
 
 现在改成: 先按 p5/p95 定出暗/亮电平, 用**迟滞**二值化得到逐帧 ON 掩码
 (:func:`_on_mask`), 取每段 ON 的**结束帧**作为候选, ``I_A^pre`` 取该亮段内的中位。
+候选之间按两条规则挑:
+
+1. **优先"真的掉到背景"的候选** (短窗 ``sw`` 后已低于 ``off_ratio·I_A^pre`` 或 3σ)——
+   闪烁的暗隙掉不下去, 漂白才掉得下去;
+2. 其中取 ``min(持续落差/σ_A, 供体升幅/σ_D)`` 最大者, 持续落差用 ``sw_post``
+   (默认 100 帧) 的长窗中位算 —— 暗隙在这么长的窗里会被"拉回来", 落差自然小。
+
+早期实现只用台阶后 4 帧的落差打分, 于是**暗隙和真漂白在打分上没区别**
+(两者 4 帧后都接近 0), 谁赢取决于供体那边谁碰巧有跳变: 实测 fov6 的 #156
+真漂白在 57.7 s, 却被判到 29.6 s 的一次部分下跌上。
+
 暗隙仍是合法的候选, 但会被 ``after`` 判据 (灭后占空比) 正确否掉 —— 各判据
 只负责自己那件事, 不再靠窗口统计量互相纠缠。
 
@@ -41,6 +52,7 @@ class EventSpec:
     """事件扫描的全部阈值。"""
     sw: int = 4                 # 台阶前后短窗(帧)
     sw_long: int = 20           # 长窗: 在这么长的窗里统计供体的亮帧
+    sw_post: int = 100          # "再也不回来"的判断窗: 用这么长窗的中位算持续落差
     lag_max: int = 16           # 供体抬升允许的最大滞后(帧)
     lag_step: int = 2
 
@@ -161,7 +173,8 @@ def find_step(ya, yd, sa=None, sd=None, spec: EventSpec = None):
     sd = float(robust_noise(yd) if sd is None else sd)
     sa, sd = max(sa, 1e-6), max(sd, 1e-6)
 
-    lo, hi = spec.sw + 2, n - spec.sw_long - spec.lag_max - 2
+    lo = spec.sw + 2
+    hi = min(n - spec.sw_long - spec.lag_max - 2, n - spec.sw_post)
     if hi <= lo:
         return None
 
@@ -173,13 +186,16 @@ def find_step(ya, yd, sa=None, sd=None, spec: EventSpec = None):
         return None
 
     # 每个亮段的结束都是一次"亮 -> 暗"转变: 候选台阶
-    best = None
+    cands = []
     for start, j in episodes:
         seg = ya[max(start, j - spec.sw_long):j]      # 亮段内的帧, 全是 ON
         if seg.size < 2:
             continue
         a_b = float(np.median(seg))
-        a_a = _med(ya, j, j + spec.sw)
+        a_a = _med(ya, j, j + spec.sw)                # 台阶后短窗 (给 off_a 用)
+        # 打分用**持续落差**: 闪烁的暗隙在 sw_post 长窗里会被"拉回来",
+        # 所以它这一项很小; 真漂白才会给出大的持续落差。
+        dA_sus = a_b - _med(ya, j, j + spec.sw_post)
         d_b = _med(yd, j - spec.sw, j)
         thr_d = d_b + 3.0 * sd                        # 供体的亮帧阈值
         d_best, l_best, n_best = -np.inf, 0, 0
@@ -198,13 +214,16 @@ def find_step(ya, yd, sa=None, sd=None, spec: EventSpec = None):
                 v = _med(yd, j + L, j + L + spec.sw) - d_b
                 if v > d_best:
                     d_best, l_best, n_best = v, L, 0
-        sc = min((a_b - a_a) / sa, d_best / sd)
-        if best is None or sc > best['score']:
-            best = dict(score=sc, j=int(j), lag=int(l_best), IA_pre=a_b,
-                        IA_post=a_a, ID_pre=d_b, ID_post=d_b + d_best,
-                        n_on=int(n_best))
-    if best is None:
+        cands.append(dict(score=min(dA_sus / sa, d_best / sd), j=int(j),
+                          lag=int(l_best), IA_pre=a_b, IA_post=a_a,
+                          ID_pre=d_b, ID_post=d_b + d_best, n_on=int(n_best)))
+    if not cands:
         return None
+    # "闪"和"漂白"的差别就是**掉到不到背景**: 优先在"短窗后已接近背景"的候选里挑。
+    # 全都不满足时退回全部候选 (此时判据会把这个事件否掉, 但 tag 信息留得住)。
+    clean = [c for c in cands
+             if c['IA_post'] < max(3.0 * sa, spec.off_ratio * c['IA_pre'])]
+    best = max(clean or cands, key=lambda c: c['score'])
 
     j, lag = best['j'], best['lag']
     # 亮态电平 (抗闪烁) 与它的纯中位数版本 (诊断: 闪烁会让后者明显偏低)

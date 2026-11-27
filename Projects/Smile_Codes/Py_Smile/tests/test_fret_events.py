@@ -126,6 +126,30 @@ def test_blink_gap_in_the_acceptor_is_not_mistaken_for_the_bleach():
     assert ev.flags['off_a'] and ev.flags['red'] and ev.flags['pre_a']
 
 
+def test_blink_gap_is_scored_below_the_real_bleach():
+    """受体闪 40 帧后复位, 再真灭: 选中的必须是真灭那一刻。
+
+    暗隙的 4 帧后电平也接近 0, 只看短窗落差会被它骗到; 持续落差 (sw_post)
+    与"是否掉到背景"两条规则一起才分得开。
+    """
+    rng = np.random.default_rng(3)
+    ia = np.full(F, 5.0)
+    ia[40:120] = 2000.0            # 亮
+    ia[120:170] = 5.0              # 闪 50 帧
+    ia[170:260] = 2000.0           # 又亮
+    ia[260:] = 5.0                 # 真灭
+    ia += rng.normal(0, 15.0, F)
+    idd = np.full(F, 5.0)
+    idd[260:] = 1200.0             # 供体只在真灭处亮
+    idd += rng.normal(0, 6.0, F)
+
+    ev = find_step(ia, idd, None, None, EventSpec(lag_max=10))
+    assert ev is not None
+    assert ev.frame == pytest.approx(260, abs=2)
+    assert ev.IA_pre > 1500 and ev.IA_post < 100
+    assert ev.flags['off_a'] and ev.flags['grn'] and ev.flags['red']
+
+
 def test_acceptor_without_any_bright_episode_has_no_event():
     """受体全程没有可辨亮态 (只有噪声) -> 连候选都不给。"""
     rng = np.random.default_rng(1)
