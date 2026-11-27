@@ -267,6 +267,9 @@ smlm/
 ### 3.10 `smlm/fret` — 双通道 FRET
 
 约定：`trace_a` 永远是**受体（红）**，`trace_d` 是**供体（绿）**。
+一次完整分析（见 `smTest_dual.ipynb`）走：`select_pairs` → `calibrate` →
+`fret_efficiency` → `save_bundle`；落盘目录是 `<sif 主名>_fret/`，五个文件名固定在
+`fret.FILES` 里，下游按名字找。
 
 | 文件 | 内容 |
 |---|---|
@@ -275,7 +278,8 @@ smlm/
 | `calibrate.py` | `calibrate` / `FretCalibration`（可落盘）/ `gamma_points` / `local_step` / `estimate_alpha` / `estimate_beta` / `estimate_gamma` / `robust_line` |
 | `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验） |
 | `datatypes.py` | `StepEvent` / `FretResult` / `CRITERIA` / `CRITERIA_STRICT` / `passed`：FRET 专用类型与判据名 |
-| `io.py` | `save_csv`（逐分子） / `save_traces_csv`（全帧长表） / `TRACE_COLS` |
+| `io.py` | `save_csv`（逐分子） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
+| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（只做编排，写表在 `io`、画图在 `viz`）；`FILES` 是对外承诺的文件名 |
 | `viz.py` | `plot_pair` / `plot_pair_gallery`（含 `which='kept'/'rejected'`）/ `plot_gamma` / `plot_efficiency` / `plot_efficiency_vs_brightness` |
 
 ---

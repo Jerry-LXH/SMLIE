@@ -69,6 +69,11 @@ def save_traces_csv(traces_d, traces_a, t_s, path, verbose=True):
     n = int(len(t_s))
     nan = np.full(n, np.nan)
     fmt = ['%.0f', '%.0f', '%.3f', '%.2f', '%.2f', '%.1f', '%.1f', '%.1f', '%.1f']
+
+    def _bg(trace, key):
+        v = getattr(trace, key, None)
+        return nan if v is None else np.asarray(v, float)[:n]
+
     d = os.path.dirname(os.path.abspath(path))
     if d:
         os.makedirs(d, exist_ok=True)
@@ -81,11 +86,41 @@ def save_traces_csv(traces_d, traces_a, t_s, path, verbose=True):
                 np.full(n, float(td.x)), np.full(n, float(td.y)),
                 np.asarray(td.intensity, float)[:n],
                 np.asarray(ta.intensity, float)[:n],
-                np.asarray(td.meta.get('bg_flux', nan), float)[:n],
-                np.asarray(ta.meta.get('bg_flux', nan), float)[:n]])
+                _bg(td, 'bg_flux'), _bg(ta, 'bg_flux')])
             np.savetxt(fh, blk, fmt=fmt, delimiter=',')
     if verbose:
         print(f'saved {len(traces_d)} traces x {n} frames -> {path}  '
               f'({os.path.getsize(path)} bytes, {len(TRACE_COLS)} cols)')
     return path
+
+
+def load_traces_csv(path, verbose=False):
+    """把 :func:`save_traces_csv` 的长表读回成按分子分块的数组。
+
+    Returns
+    -------
+    dict
+        ``{'emitter_id': (n_mol,), 'frame': (n_mol, n_frames), 't_s': ...,
+        'x_px': ..., 'y_px': ..., 'I_donor': ..., 'I_acceptor': ...,
+        'bg_donor': ..., 'bg_acceptor': ...}``
+
+    要求同一文件里所有分子帧数相同 (``save_traces_csv`` 写出来就满足);
+    不一致时按到达顺序无法安全 reshape, 会直接报错并提示改用原始长表。
+    """
+    arr = np.loadtxt(path, delimiter=',', skiprows=1, ndmin=2)
+    ids = arr[:, 0].astype(int)
+    order = np.lexsort((arr[:, 1], ids))
+    arr, ids = arr[order], ids[order]
+    uniq, counts = np.unique(ids, return_counts=True)
+    if counts.size and counts.min() != counts.max():
+        raise ValueError(
+            f'{path}: 各分子帧数不一致 {counts.min()}..{counts.max()}, '
+            f'不能按块 reshape; 请直接用长表 (一行 = 一分子一帧)')
+    n = int(counts[0]) if counts.size else 0
+    out = {'emitter_id': uniq.astype(int)}
+    for k, name in enumerate(TRACE_COLS[1:], start=1):
+        out[name] = arr[:, k].reshape(uniq.size, n)
+    if verbose:
+        print(f'loaded {uniq.size} traces x {n} frames <- {path}')
+    return out
 

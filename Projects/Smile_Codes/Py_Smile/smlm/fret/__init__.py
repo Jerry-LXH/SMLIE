@@ -42,7 +42,8 @@ from .efficiency import EfficiencySpec, fret_efficiency, window_mean
 
 # --- 导出 ---
 from .datatypes import StepEvent, FretResult, CRITERIA, CRITERIA_STRICT, passed
-from .io import save_csv, save_traces_csv, TRACE_COLS
+from .io import save_csv, save_traces_csv, load_traces_csv, TRACE_COLS
+from .export import save_bundle, FILES
 
 from . import viz
 
@@ -59,5 +60,6 @@ __all__ = [
     # 效率
     'EfficiencySpec', 'fret_efficiency', 'window_mean', 'FretResult',
     # 导出
-    'save_csv', 'viz', 'save_traces_csv', 'TRACE_COLS',
+    'save_csv', 'viz', 'save_traces_csv', 'load_traces_csv', 'TRACE_COLS',
+    'save_bundle', 'FILES',
 ]
