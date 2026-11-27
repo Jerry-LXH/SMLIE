@@ -8,7 +8,13 @@ import numpy as np
 
 COLS = ['idx', 't_bleach_s', 'frame_j', 'lag', 'x_px', 'y_px', 'n_pre', 'n_on',
         'I_A_pre', 'I_D_pre', 'I_A_post', 'I_D_post', 'S_A',
-        'E', 'E_don', 'snr_A', 'gamma', 'alpha', 'beta']
+        'E', 'E_don', 'snr_A']
+
+# 质量控制列 (来自 PairRecord): 下游可以据此只取 "受体平稳" 的那一批。
+# 单独列出来是因为它们**可空**: 没有诊断时整列写空, 但列本身总在。
+QC_COLS = ['red_label', 'red_duty', 'spread', 'n_d_pre']
+
+COLS = COLS + QC_COLS + ['gamma', 'alpha', 'beta']
 
 # 未筛选 trace 的长表
 TRACE_COLS = ['emitter_id', 'frame', 't_s', 'x_px', 'y_px',
@@ -20,13 +26,16 @@ def _num(v, nd):
     return round(v, nd) if np.isfinite(v) else ''
 
 
-def save_csv(results, path, cal=None, *, centres=None, verbose=True):
+def save_csv(results, path, cal=None, *, centres=None, qc=None, verbose=True):
     """一行一个分子; γ/α/β 也写进每一行, 单个 csv 就能完整复现。
 
     Parameters
     ----------
     centres : dict, optional
         ``{emitter_id: (x, y)}``, 写进 ``x_px / y_px``。
+    qc : dict, optional
+        ``{emitter_id: {列名: 值}}``, 填 :data:`QC_COLS` 那几列。缺的分子写空
+        (列本身总在, 下游按名字读就不会因为有没有 qc 而变)。
     """
     rows = sorted(results, key=lambda r: r.emitter_id)
     g = float(cal.gamma) if cal is not None else np.nan
@@ -35,20 +44,27 @@ def save_csv(results, path, cal=None, *, centres=None, verbose=True):
     d = os.path.dirname(os.path.abspath(path))
     if d:
         os.makedirs(d, exist_ok=True)
+    qc = qc or {}
 
     with open(path, 'w', newline='', encoding='utf-8-sig') as f:
         w = csv.writer(f)
         w.writerow(COLS)
         for r in rows:
-            xy = (centres or {}).get(int(r.emitter_id), (np.nan, np.nan))
+            rid = int(r.emitter_id)
+            xy = (centres or {}).get(rid, (np.nan, np.nan))
+            extra = qc.get(rid, {})
+            ndp = extra.get('n_d_pre', -1)
+            ndp = '' if (ndp is None or int(ndp) < 0) else int(ndp)
             w.writerow([
-                int(r.emitter_id), _num(r.t_bleach, 3), int(r.frame), int(r.lag),
+                rid, _num(r.t_bleach, 3), int(r.frame), int(r.lag),
                 _num(r.x if np.isfinite(r.x) else xy[0], 3),
                 _num(r.y if np.isfinite(r.y) else xy[1], 3),
                 int(r.n_pre), int(r.n_on),
                 _num(r.IA_pre, 1), _num(r.ID_pre, 1),
                 _num(r.IA_post, 1), _num(r.ID_post, 1), _num(r.S_A, 1),
                 _num(r.E, 4), _num(r.E_don, 4), _num(r.snr_A, 2),
+                extra.get('red_label', ''), _num(extra.get('red_duty', np.nan), 3),
+                _num(extra.get('spread', np.nan), 2), ndp,
                 _num(g, 4), _num(a, 4), _num(b, 2)])
 
     if verbose:

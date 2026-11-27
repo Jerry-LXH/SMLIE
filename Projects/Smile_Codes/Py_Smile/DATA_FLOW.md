@@ -278,8 +278,8 @@ smlm/
 | `calibrate.py` | `calibrate` / `FretCalibration`（可落盘）/ `gamma_points` / `local_step` / `estimate_alpha` / `estimate_beta` / `estimate_gamma` / `robust_line` |
 | `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验）。`I_A^pre` / `I_D^pre` 只平均**受体亮着的帧**（受体闪时，熄灭间隙里供体已去淬灭，混进来会把 E 压低） |
 | `datatypes.py` | `StepEvent` / `FretResult` / `CRITERIA` / `CRITERIA_STRICT` / `passed`：FRET 专用类型与判据名 |
-| `io.py` | `save_csv`（逐分子） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
-| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 就不写未筛选的那张表）；只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名 |
+| `io.py` | `save_csv`（逐分子，可带 `qc` 追加 `QC_COLS` 那几列：`red_label` / `red_duty` / `spread` / `n_d_pre`） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
+| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 就不写未筛选的那张表）；`fret.csv` 由 `records` 自动带上判据量，下游按 `red_label` 就能只取"受体平稳"的子集。只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名 |
 | `viz.py` | `plot_pair` / `plot_pair_gallery`（含 `which='kept'/'rejected'`）/ `plot_gamma` / `plot_efficiency` / `plot_efficiency_vs_brightness` |
 
 ---

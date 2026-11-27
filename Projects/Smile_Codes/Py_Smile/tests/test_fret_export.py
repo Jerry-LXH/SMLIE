@@ -86,6 +86,46 @@ def test_fret_csv_keeps_gamma_alpha_beta_on_every_row(tmp_path):
     assert all(float(r[-2]) == 0.09 for r in body)  # alpha
 
 
+def _event(eid=0):
+    return fr.StepEvent(emitter_id=eid, frame=J, lag=LAG,
+                        IA_pre=300.0, IA_post=0.0, ID_pre=5.0, ID_post=160.0,
+                        dIA=300.0, dID=155.0, dID_long=155.0)
+
+
+def test_fret_csv_carries_acceptor_state_columns(tmp_path):
+    """fret.csv 带上判据量, 下游不必回头再筛一遍 (只取 red_label=='steady')。"""
+    td, ta = _channels()
+    recs = _records()
+    for k, (label, duty, spread) in ((0, ('blinking', 0.75, 1.4)),
+                                     (2, ('steady', 1.0, 0.9))):
+        recs[k].event = _event(k)         # 有事件才会把 qc 写进去
+        recs[k].red_label, recs[k].red_duty = label, duty
+        recs[k].spread, recs[k].n_d_pre = spread, 1
+
+    fr.save_bundle(tmp_path, records=recs, results=_results(),
+                   traces_d=td, traces_a=ta, cal=_cal(), ex_time=EX,
+                   verbose=False)
+    with open(tmp_path / fr.FILES['fret_csv'], encoding='utf-8-sig') as f:
+        rows = list(csv.DictReader(f))
+    assert [r['red_label'] for r in rows] == ['blinking', 'steady']
+    assert float(rows[0]['red_duty']) == pytest.approx(0.75)
+    assert float(rows[0]['spread']) == pytest.approx(1.4)
+    assert rows[1]['n_d_pre'] == '1'
+    assert float(rows[0]['gamma']) == pytest.approx(1.1)     # 列序没被打乱
+
+
+def test_fret_csv_qc_columns_are_blank_without_diagnostics(tmp_path):
+    """没有 PairRecord 诊断时列还在, 只是空 —— 下游按名字读不会时有时无。"""
+    td, ta = _channels()
+    fr.save_bundle(tmp_path, records=_records(), results=_results(),
+                   traces_d=td, traces_a=ta, cal=_cal(), ex_time=EX,
+                   verbose=False)
+    with open(tmp_path / fr.FILES['fret_csv'], encoding='utf-8-sig') as f:
+        rows = list(csv.DictReader(f))
+    for c in fr.io.QC_COLS:
+        assert all(r[c] == '' for r in rows), c
+
+
 def test_trace_tables_hold_all_and_only_kept(tmp_path):
     td, ta = _channels()
     fr.save_bundle(tmp_path, records=_records(), results=_results(),

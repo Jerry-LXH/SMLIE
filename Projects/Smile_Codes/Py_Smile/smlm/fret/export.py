@@ -90,8 +90,16 @@ def save_bundle(out_dir, *, records, results, traces_d, traces_a, cal=None,
 
     # ---- 2) 逐分子 E 表 ----
     centres = {int(t.emitter_id): (float(t.x), float(t.y)) for t in traces_d}
+    # 顺带把"这条 trace 靠不靠得住"的判据量写进同一张表: 下游可以只取
+    # red_label == 'steady' 的那一批, 不必回头再跑一遍筛选
+    qc = {int(r.emitter_id): {
+              'red_label': getattr(r, 'red_label', ''),
+              'red_duty': getattr(r, 'red_duty', np.nan),
+              'spread': getattr(r, 'spread', np.nan),
+              'n_d_pre': getattr(r, 'n_d_pre', -1)}
+          for r in records if r.event is not None}
     written['fret_csv'] = save_csv(results or [], path('fret_csv'), cal,
-                                   centres=centres, verbose=False)
+                                   centres=centres, qc=qc, verbose=False)
 
     # ---- 3) 合格 trace 总览 ----
     if keep:
