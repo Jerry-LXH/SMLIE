@@ -119,16 +119,26 @@ def test_pre_bleach_level_is_a_median_of_the_window():
     ia = np.zeros(F)
     ia[J - 10:J] = [10.0, 20.0, 30.0, 40.0, 50.0,
                     60.0, 70.0, 80.0, 90.0, 1000.0]      # 一帧是尖峰
-    assert P.pre_bleach_level(_trace(ia), J, 10) == pytest.approx(55.0)
+    # 高于窗内中位的那些帧的中位: 60..1000 -> 80 (干净 trace 与普通中位只差一点)
+    assert P.pre_bleach_level(_trace(ia), J, 10) == pytest.approx(80.0)
     assert np.isnan(P.pre_bleach_level(_trace(ia), 0, 10))
 
 
+def test_pre_bleach_level_ignores_dark_gaps_from_blinking():
+    """受体在漂白前闪了几下: 普通中位会被暗帧拉低, 亮帧中位不会。"""
+    ia = np.zeros(F)
+    ia[J - 10:J] = [0.0, 300.0, 0.0, 300.0, 0.0, 300.0, 0.0, 300.0, 0.0, 300.0]
+    assert P.pre_bleach_level(_trace(ia), J, 10) == pytest.approx(300.0)
+    assert float(np.median(ia[J - 10:J])) == pytest.approx(150.0)
+
+
 def test_no_red_drop_is_rejected():
-    """红光不漂白 -> 找到的"台阶"过不了物理门限。"""
+    """红光不漂白 -> 受体没有"亮段结束", 连候选都没有。"""
     pa, pd = _pair(ia_pre=3000.0, ia_post=3000.0)
     rec, _ = _run(pa, pd, [_donor()])
     assert not rec.keep
-    assert 'flags' in rec.reasons
+    assert rec.event is None
+    assert rec.reasons == ['event']
 
 
 def test_too_short_trace_has_no_event():
@@ -177,7 +187,29 @@ def test_red_recovering_after_bleach_is_rejected():
     ia[J + 100:] += 3000.0
     rec, _ = _run(_trace(ia), pd, [_donor()])
     assert not rec.keep and 'after' in rec.reasons
-    assert rec.red_after > rec.red_after_thr
+    assert rec.red_after_duty > 0.2
+
+
+def test_after_gate_tolerates_a_short_blink_after_the_bleach():
+    """灭后只是短暂闪一下 (占空比 10%) -> 不算"又亮", 该合格。
+
+    这条是给会闪的样品用的: 用 p95 判"有没有再亮过"会把它们全砍掉。
+    """
+    pa, pd = _pair()
+    ia = np.array(pa['intensity'])
+    ia[J + 50:J + 70] += 2500.0          # 200 帧里亮 20 帧
+    rec, _ = _run(_trace(ia), pd, [_donor()])
+    assert rec.red_after_duty == pytest.approx(0.10, abs=0.02)
+    assert 'after' not in rec.reasons
+    assert rec.keep, rec.reasons
+
+
+def test_after_gate_switches_back_to_p95_when_duty_is_disabled():
+    pa, pd = _pair()
+    ia = np.array(pa['intensity'])
+    ia[J + 50:J + 70] += 2500.0
+    rec, _ = _run(_trace(ia), pd, [_donor()], after_duty=None)
+    assert 'after' in rec.reasons       # 老口径: p95 摸到那 20 帧就否
 
 
 def test_neighbour_gate_is_optional():

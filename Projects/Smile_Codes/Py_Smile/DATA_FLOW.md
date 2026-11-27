@@ -273,7 +273,7 @@ smlm/
 
 | 文件 | 内容 |
 |---|---|
-| `events.py` | `EventSpec` / `find_step` / `scan_steps` / `post_level`：在窗口内找"红降 + 绿升"台阶，带 7 条物理门限与抗闪烁的亮态电平 |
+| `events.py` | `EventSpec` / `find_step` / `scan_steps` / `post_level`：受体侧把**每个亮段的结束**当候选台阶（迟滞二值化，闪烁的暗隙不再冒充漂白），供体侧用亮帧中位；带 7 条物理门限 |
 | `pairs.py` | `PairCriteria` / `select_pairs`：漏斗式筛选（event → red → flags → spread → attr → neigh → after），逐级记录否决原因 |
 | `calibrate.py` | `calibrate` / `FretCalibration`（可落盘）/ `gamma_points` / `local_step` / `estimate_alpha` / `estimate_beta` / `estimate_gamma` / `robust_line` |
 | `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验） |

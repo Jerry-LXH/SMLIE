@@ -17,8 +17,10 @@
              亮度不可靠"的直接检验; 按 ``attr_dup`` 做空间去重, 避免同一个物理
              分子被定位器拆成两条。
 ``neigh``    绿光背景环里被挖掉的核心数 ≤ ``neighbours_max`` (环背景可信度)。
-``after``    红光灭掉之后**不再亮** (``p95`` 低于门限)。孔径里若还有第二个受体,
-             ``I_A^pre`` 和 ``ΔI_A`` 都不可信。
+``after``    红光灭掉以后**不再常亮** (灭后 ``post_win`` 帧里超过阈值的占空比
+              ≤ ``after_duty``)。用占空比而不是 p95: p95 是"灭后有没有再亮过",
+              **会闪的受体在 200 帧里几乎必然再亮一次**, 于是被误判成"孔径里有
+              ̄第二个受体"; 占空比才真正区分"另一个常亮的受体"和"同一个分子在闪"。
 
 **刻意没有** ``I_D^pre ≤ f·I_D^post`` 这一条: 那个比值就是 ``1 − E``, 拿它当质量
 门限等于"按 E 筛分子", 会把低 E 的好分子全砍掉, 而且筛完就不能再拿这批数据报告
@@ -85,6 +87,9 @@ class PairCriteria:
         绿光环内邻居数上限; ``None`` = 不设限 (只报数)。
     ``post_win``
         "红光灭后又亮"检查窗 (帧)。
+    ``after_duty``
+        灭后 ``post_win`` 帧里亮度超过阈值的**占空比**上限。``None`` = 退回旧口径
+        (灭后 p95 低于阈值), 只对完全不闪的样品合适。
     ``require``
         ``find_step`` 的物理门限里必须全部通过的那些。
     """
@@ -100,15 +105,18 @@ class PairCriteria:
     max_n_pre: int = 1
     neighbours_max: int | None = None
     post_win: int = 200
+    after_duty: float | None = 0.20
     require: tuple = CRITERIA_STRICT
 
     def report(self):
         nb = '不限' if self.neighbours_max is None else f'≤{self.neighbours_max}'
+        af = ('p95 口径' if self.after_duty is None
+              else f'占空比≤{self.after_duty:.0%}')
         return (f'PairCriteria(漂白前 {self.red_win} 帧中位 ≥{self.red_min:.0f}, '
                 f'lag≤{self.lag_max} 帧, pre 窗 {self.pre_win} 帧 '
                 f'离散度≤{self.k_spread:g}σ, '
                 f'孔径 {self.attr_scale:g}×r 内 ≤{self.max_n_pre} 个, '
-                f'环内邻居 {nb})')
+                f'环内邻居 {nb}, 灭后 {af})')
 
 
 @dataclass
@@ -122,8 +130,9 @@ class PairRecord:
     # --- 红光 ---
     IA_max: float = np.nan               # 全程 max(intensity), 仅诊断
     IA_pre_win: float = np.nan           # 漂白前 red_win 帧的中位亮度 (判据用)
-    red_after: float = np.nan            # 灭后 p95(intensity)
+    red_after: float = np.nan            # 灭后 p95(intensity), 仅诊断
     red_after_thr: float = np.nan
+    red_after_duty: float = np.nan        # 灭后超过阈值的帧占比 (判据用)
     # --- 绿光洁净度 ---
     spread: float = np.nan               # pre 窗离散度 / 实测噪声 (1 = 纯噪声)
     pre_level: float = np.nan            # pre 窗中位亮度 / σ (单位 σ)
@@ -224,9 +233,12 @@ def pre_spread(trace_d, j, pre_win):
 #  绿光归属: 孔径里 pre 窗还有几个分子在发光
 # ---------------------------------------------------------------------------
 def pre_bleach_level(trace_a, j, red_win):
-    """台阶前 ``red_win`` 帧的中位亮度 (受体在"漂白"之前到底亮不亮)。
+    """台阶前 ``red_win`` 帧的**亮态**亮度 (受体在"漂白"之前到底亮不亮)。
 
-    中位数而不是均值: 这 10 帧里如果有一帧热像素/爆闪, 均值会被拉高。
+    先取窗内中位作阈值, 再对高于阈值的帧取中位。会闪的受体在 10 帧里可能只有
+    5~6 帧亮着, 普通中位会被暗帧拉低一半, 从而把亮分子判成"没受体"; 取亮帧中位
+    后, 干净 trace 与普通中位几乎相同 (只差 ~0.2σ), 闪烁 trace 则不被低估。
+
     窗口为空 (``j <= 0``) 时返回 ``nan``。
     """
     I = np.asarray(trace_a['intensity'], float)
@@ -235,7 +247,9 @@ def pre_bleach_level(trace_a, j, red_win):
     seg = seg[np.isfinite(seg)]
     if seg.size < 2:
         return np.nan
-    return float(np.median(seg))
+    med = float(np.median(seg))
+    on = seg[seg > med]
+    return float(np.median(on)) if on.size >= 3 else med
 
 
 def _n_clusters(pts, r):
@@ -354,7 +368,10 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
         rec.n_in_ap, rec.d_nearest = st['n_in_ap'], st['d_nearest']
         rec.red_after_thr = max(3.0 * float(ev.sig_a),
                                 float(spec.off_ratio) * max(ev.IA_pre, 0.0))
-        rec.red_after = _p95(ia[j + lag: j + lag + crit.post_win])
+        tail = ia[j + lag: j + lag + crit.post_win]
+        rec.red_after = _p95(tail)
+        rec.red_after_duty = (float(np.mean(tail > rec.red_after_thr))
+                              if tail.size else np.nan)
 
     # ---- 判据 (顺序 = FUNNEL) ----
     if ev is None:
@@ -373,7 +390,11 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
             rec.reasons.append('attr')
         if crit.neighbours_max is not None and rec.neighbours > crit.neighbours_max:
             rec.reasons.append('neigh')
-        if np.isfinite(rec.red_after) and rec.red_after > rec.red_after_thr:
+        if crit.after_duty is None:
+            if np.isfinite(rec.red_after) and rec.red_after > rec.red_after_thr:
+                rec.reasons.append('after')
+        elif (np.isfinite(rec.red_after_duty)
+              and rec.red_after_duty > float(crit.after_duty)):
             rec.reasons.append('after')
     rec.keep = not rec.reasons
     return rec

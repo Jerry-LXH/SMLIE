@@ -100,6 +100,41 @@ def test_no_green_rise_has_no_bright_state():
 
 
 # ---------------------------------------------------------------------------
+#  受体在闪: 台阶必须落在"最后一次亮 -> 暗", 不能落在暗隙上
+# ---------------------------------------------------------------------------
+def test_blink_gap_in_the_acceptor_is_not_mistaken_for_the_bleach():
+    """受体: 亮 30 帧 -> 暗 20 帧(闪) -> 亮 30 帧 -> 灭; 供体在真漂白处才亮。
+
+    老实现 (滑动窗均值取最大红降) 会把 j 放在暗隙的起点上, 于是
+    ``I_A^pre`` / ``off_a`` / ``t_bleach`` 全错, 并被 ``after`` 判成"灭后又亮"。
+    """
+    rng = np.random.default_rng(0)
+    lo, hi, blink_a, blink_b = 100, 130, 150, 180       # 亮段1 / 暗隙 / 亮段2
+    ia = np.full(F, 5.0)
+    ia[lo:hi] = 3000.0
+    ia[blink_a:blink_b] = 3000.0
+    ia += rng.normal(0, 20.0, F)
+
+    idd = np.full(F, 250.0)
+    idd[blink_b:] = 2500.0
+    idd += rng.normal(0, 8.0, F)
+
+    ev = _step(ia, idd)
+    assert ev.frame == pytest.approx(blink_b, abs=1)     # 真漂白, 不是暗隙起点
+    assert ev.IA_pre == pytest.approx(3000.0, rel=0.05)  # 亮段电平, 不是半亮
+    assert ev.IA_post < 0.1 * ev.IA_pre
+    assert ev.flags['off_a'] and ev.flags['red'] and ev.flags['pre_a']
+
+
+def test_acceptor_without_any_bright_episode_has_no_event():
+    """受体全程没有可辨亮态 (只有噪声) -> 连候选都不给。"""
+    rng = np.random.default_rng(1)
+    ia = 30.0 + rng.normal(0, 20.0, F)
+    idd = 250.0 + rng.normal(0, 8.0, F)
+    assert find_step(ia, idd, None, None, EventSpec(lag_max=10)) is None
+
+
+# ---------------------------------------------------------------------------
 #  local_step (γ 的分母) 用同一口径
 # ---------------------------------------------------------------------------
 def test_local_step_is_blink_robust():
