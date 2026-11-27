@@ -36,8 +36,6 @@ from .pair import (PairSet, match_pairs, pair_channels, pair_multichannels,
 from .fit import (poly_terms, n_params, design, fit_transform,
                   cv_select_order, MIN_PAIRS_PER_PARAM)
 from .roi import MultichannelROI
-from .channels import (windows_from_crops, multi_from_crops, mirror_crop,
-                       analysis_crops, DEFAULT_SPLIT_X)
 from .pipeline import (localize_channel, mean_frame,
                        pair_multichannel_files, fit_multichannel_pairs,
                        multichannel_stack_from_calibration)
@@ -66,8 +64,7 @@ __all__ = [
     'poly_terms', 'n_params', 'design', 'fit_transform',
     'cv_select_order', 'MIN_PAIRS_PER_PARAM',
     # 取框
-    'MultichannelROI', 'windows_from_crops', 'multi_from_crops', 'mirror_crop',
-    'analysis_crops', 'DEFAULT_SPLIT_X',
+    'MultichannelROI',
     # 流程
     'localize_channel', 'mean_frame',
     'pair_multichannel_files', 'fit_multichannel_pairs',
