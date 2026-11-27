@@ -149,7 +149,8 @@ class DriftCorrector(Transform):
         return self.correct_image(stack, self.trace)[0]
 
     # ---- 图像 ----
-    def correct_image(self, image: ImageStack, trace: DriftTrace):
+    def correct_image(self, image: ImageStack, trace: DriftTrace,
+                      window=None):
         from scipy.ndimage import shift as nd_shift
 
         data = np.asarray(image.data)                  # (T, H, W)
@@ -157,8 +158,14 @@ class DriftCorrector(Transform):
         if trace.n_frames != T:
             raise ValueError(f"帧数不一致: image {T} vs trace {trace.n_frames}")
 
-        # 裁切窗口
-        if self.crop is None:
+        # 裁切窗口: 显式 window 优先, 否则按 crop 居中
+        if window is not None:
+            r0, c0, H_out, W_out = (int(v) for v in window)
+            if r0 < 0 or c0 < 0 or H_out <= 0 or W_out <= 0 \
+                    or r0 + H_out > H or c0 + W_out > W:
+                raise ValueError(
+                    f"window {(r0, c0, H_out, W_out)} 超出图像尺寸 ({H},{W})")
+        elif self.crop is None:
             H_out, W_out, r0, c0 = H, W, 0, 0
         else:
             H_out, W_out = self.crop

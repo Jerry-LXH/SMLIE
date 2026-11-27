@@ -96,6 +96,12 @@ def calib_windows_from_calibs(calibs, reference):
         if cal is None or ch == reference or not getattr(cal, 'roi', None):
             continue
         roi = cal.roi
+        if roi.get('type') == 'MultichannelROI':
+            windows = roi.get('windows')
+            if isinstance(windows, dict):
+                out.update({name: _as_window(window)
+                            for name, window in windows.items()})
+                continue
         if 'red_x' not in roi:
             continue
         x0, x1 = (int(v) for v in roi['red_x'])
@@ -423,6 +429,29 @@ class DualViewGeometry:
         chs = ','.join(self.calibs) or '-'
         return (f'DualViewGeometry(ref={self.reference!r}, '
                 f'channels={list(self.windows)}, calib={chs})')
+
+
+# ---------------------------------------------------------------------------
+#  通道间坐标映射 (单点工具, 供漂移 / trace 等复用)
+# ---------------------------------------------------------------------------
+def map_channel_xy(xy, geom, source, target):
+    """Map ``[x, y]`` points between two channel analysis windows.
+
+    Both channels must be the geometry reference or carry a registration to it;
+    the mapping is ``to_reference`` followed by ``to_channel``.
+    """
+    points = np.asarray(xy, dtype=float).reshape(-1, 2)
+    for channel in (source, target):
+        if channel not in geom.windows:
+            raise KeyError(f'unknown channel {channel!r}; '
+                           f'available: {list(geom.windows)}')
+    for channel in {source, target}:
+        if channel != geom.reference and channel not in geom.calibs:
+            raise ValueError(f'channel {channel!r} has no registration to '
+                             f'geometry reference {geom.reference!r}')
+    if source == target:
+        return points.copy()
+    return geom.to_channel(geom.to_reference(points, source), target)
 
 
 # ---------------------------------------------------------------------------

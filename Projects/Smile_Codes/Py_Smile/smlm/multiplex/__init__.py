@@ -29,8 +29,9 @@
 from __future__ import annotations
 
 from .transform import DualViewCalibration, NPZ_VERSION
-from .pair import (PairSet, match_pairs, pair_channels, merge_pairs,
-                   DEFAULT_TOLS)
+from .bundle import MultiChannelCalibrationBundle
+from .pair import (PairSet, match_pairs, pair_channels, pair_multichannels,
+                   merge_pairs, DEFAULT_TOLS)
 from .fit import (poly_terms, n_params, design, fit_transform, residual_report,
                   cv_select_order, MIN_PAIRS_PER_PARAM)
 from .channels import (DualViewROI, split_dual_view, cut_pair, build_multi,
@@ -40,27 +41,39 @@ from .channels import (DualViewROI, split_dual_view, cut_pair, build_multi,
                        mirror_crop, crops_from_ref, analysis_crops,
                        DEFAULT_SPLIT_X, DEFAULT_ROW_RANGE, DEFAULT_SEAM,
                        SEAM_HINT)
+from .roi import MultichannelROI
 from .pipeline import (calibrate_dual_view, calib_one_file, load_multi,
-                       localize_channel, mean_frame)
+                       localize_channel, mean_frame,
+                       pair_multichannel_files, fit_multichannel_pairs,
+                       multichannel_stack_from_calibration)
 from .coords import (DualViewGeometry, geometry_from_multi, geometry_from_crops,
-                     calib_windows_from_roi, window_from_range)
-from .drift import (MultiDrift, merge_registered, estimate_drift_multi,
-                    correct_multi, crop_for_trace, common_crop)
+                     calib_windows_from_roi, window_from_range, map_channel_xy)
+from .drift import (CropWindow, correct_multi, drift_crop_window,
+                    drift_requirements, estimate_drift_multi,
+                    merge_registered)
+from .emitters import (analyze_multichannel_emitters, channel_locs,
+                       channel_names, emitter_centers_xy)
+from .traces import extract_multichannel_traces
 from . import viz
 from .viz import (plot_displacement_field, plot_residual_hist,
                   plot_residual_map, plot_overview, plot_channel_check,
-                  plot_cut_windows)
+                  plot_cut_windows, plot_multichannel_localizations,
+                  plot_multichannel_crop, plot_multi_drift, plot_drift_fov,
+                  plot_channel_traces)
 
 __all__ = [
     # 变换
     'DualViewCalibration', 'NPZ_VERSION',
+    'MultiChannelCalibrationBundle',
     # 配对
-    'PairSet', 'match_pairs', 'pair_channels', 'merge_pairs', 'DEFAULT_TOLS',
+    'PairSet', 'match_pairs', 'pair_channels', 'pair_multichannels',
+    'merge_pairs', 'DEFAULT_TOLS',
     # 拟合
     'poly_terms', 'n_params', 'design', 'fit_transform', 'residual_report',
     'cv_select_order', 'MIN_PAIRS_PER_PARAM',
     # 切通道 / 余量
     'DualViewROI', 'split_dual_view', 'cut_pair', 'build_multi',
+    'MultichannelROI',
     'cut_channels', 'multi_from_crops',
     'refine_coarse_offset', 'check_drift_margin', 'seam_windows',
     'split_from_crops', 'windows_from_crops',
@@ -68,14 +81,20 @@ __all__ = [
     'DEFAULT_SPLIT_X', 'DEFAULT_ROW_RANGE', 'DEFAULT_SEAM', 'SEAM_HINT',
     # 流程
     'calibrate_dual_view', 'calib_one_file', 'load_multi', 'localize_channel',
-    'mean_frame',
+    'mean_frame', 'pair_multichannel_files', 'fit_multichannel_pairs',
+    'multichannel_stack_from_calibration',
     # 坐标层
     'DualViewGeometry', 'geometry_from_multi', 'geometry_from_crops',
-    'calib_windows_from_roi', 'window_from_range',
+    'calib_windows_from_roi', 'window_from_range', 'map_channel_xy',
     # 多通道漂移
-    'MultiDrift', 'merge_registered', 'estimate_drift_multi', 'correct_multi',
-    'crop_for_trace', 'common_crop',
+    'CropWindow', 'merge_registered', 'estimate_drift_multi', 'correct_multi',
+    'drift_crop_window', 'drift_requirements',
+    # 多通道 emitter 聚类
+    'analyze_multichannel_emitters', 'channel_locs', 'channel_names',
+    'emitter_centers_xy', 'extract_multichannel_traces',
     # 可视化
     'viz', 'plot_displacement_field', 'plot_residual_hist', 'plot_residual_map',
     'plot_overview', 'plot_channel_check', 'plot_cut_windows',
+    'plot_multichannel_localizations', 'plot_multichannel_crop',
+    'plot_multi_drift', 'plot_drift_fov', 'plot_channel_traces',
 ]

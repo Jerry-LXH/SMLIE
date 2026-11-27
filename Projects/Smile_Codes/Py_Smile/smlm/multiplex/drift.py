@@ -1,346 +1,644 @@
-# smlm/multiplex/drift.py
-"""多通道漂移: 先配准点云, 再估**一条**物理漂移, 然后按各通道自己的像素尺度校正。
+"""Estimate one registered drift and apply it to every channel.
 
-为什么要先配准再合并
---------------------
-漂移是样品相对探测器的运动, 两个通道看到的是**同一个物理位移** —— 只是各自成像
-在不同的像素坐标里(像元尺度差 ~0.1%, 再加一点剪切)。所以正确顺序是::
-
-    各通道定位 --(配准, 坐标层)--> 参考通道坐标系 --(合并)--> 一条点云 --> 一条漂移
-
-**绝不能**各自估一条再合并: 那会把"通道间的固定 1.4 px 错位"和"真实的逐帧漂移"
-混在一起, 得到两条互不一致的轨迹。
-
-为什么只估一条、再换算回各通道
-------------------------------
-合并后点密度翻倍, 估计更稳; 也顺便解决红通道分子少、单独估不稳的问题。换算是纯
-线性化的: 在视场中心取雅可比 J = d(ref)/d(ch), 则 ``d_ch = J^-1 · d_ref``。
-双视角的形变只有 ~0.1 px 量级, 用中心 J 的误差在 1e-3 相对量, 可以忽略。
-
-图像只做平移
-------------
-``DriftCorrector`` 做的是亚像素傅里叶平移, 光度中性, 不会改变 PSF 形状。空间变化
-的形变一律留给坐标层(见 ``coords.py``)。
+Conventions
+-----------
+* ``DriftTrace`` values are cumulative sample drift **in each channel's own
+  pixel frame**. The same physical motion therefore appears with slightly
+  different ``(dx, dy)`` per channel; compare or combine channels only after
+  mapping through the registration (``DualViewGeometry``).
+* Every trace is normalized so that frame 0 is zero; frame 0 is the drift
+  reference frame in which crop windows are expressed.
+* Images are only translated (no resampling of channel distortion); channel
+  geometry stays in the coordinate layer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+
 import numpy as np
 
-from ..datatypes import Localizations, DriftTrace
+from ..datatypes import DriftTrace, Localizations, MultiImageStack
 from ..imgprocess import DriftCorrector
-from .coords import DualViewGeometry
+from .coords import DualViewGeometry, map_channel_xy
+from .emitters import channel_locs, channel_names
+
+
+_CONCAT_FIELDS = ('frame', 'x', 'y', 'photons', 'bg', 'sigma', 'lp', 'z',
+                  'z_lp')
+_SIDES = ('top', 'bottom', 'left', 'right')
 
 
 # ---------------------------------------------------------------------------
-#  点云合并 (必须先配准)
+#  Small helpers
 # ---------------------------------------------------------------------------
-_CONCAT_FIELDS = ('frame', 'x', 'y', 'photons', 'bg', 'sigma', 'lp', 'z', 'z_lp')
+def _pixel_count(value, name):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value, (int, np.integer)):
+        raise TypeError(f'{name} must be an integer pixel count')
+    if value < 0:
+        raise ValueError(f'{name} must be non-negative')
+    return int(value)
 
 
+def _image_shape(shape):
+    try:
+        height, width = (int(v) for v in tuple(shape)[-2:])
+    except (TypeError, ValueError):
+        raise TypeError('image_shape must end with two integers '
+                        '(height, width)') from None
+    if height <= 0 or width <= 0:
+        raise ValueError(f'invalid image shape {shape}')
+    return height, width
+
+
+def _drift_traces(drift):
+    if not isinstance(drift, Mapping):
+        raise TypeError('drift must be a {channel: DriftTrace} mapping, '
+                        f'got {type(drift).__name__}')
+    if not drift:
+        raise ValueError('drift mapping is empty')
+    for channel, trace in drift.items():
+        if not isinstance(trace, DriftTrace):
+            raise TypeError(f'drift[{channel!r}] must be a DriftTrace')
+    return drift
+
+
+def _channel_names(channels, available, name):
+    return channel_names(available, channels, name=name)
+
+
+def _normalize_locs(multi, locs):
+    return channel_locs(multi, locs, allow_missing=True)
+
+
+def _validate_locs(locs, channel, n_frames):
+    if not isinstance(locs, Localizations):
+        raise TypeError(f'locs[{channel!r}] must be Localizations')
+    for name in ('x', 'y'):
+        values = np.asarray(getattr(locs, name))
+        if values.ndim != 1 or len(values) != len(locs):
+            raise ValueError(f'locs[{channel!r}].{name} must be a 1D array '
+                             'matching the localization count')
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f'locs[{channel!r}].{name} contains non-finite '
+                             'coordinates')
+    frames = np.asarray(locs.frame)
+    if frames.ndim != 1 or len(frames) != len(locs):
+        raise ValueError(f'locs[{channel!r}].frame must be a 1D array '
+                         'matching the localization count')
+    if frames.size:
+        if not np.all(np.isfinite(frames)):
+            raise ValueError(f'locs[{channel!r}] contains non-finite frames')
+        frame_idx = frames.astype(int)
+        if not np.array_equal(frames, frame_idx):
+            raise ValueError(f'locs[{channel!r}].frame must contain integers')
+        if frame_idx.min() < 0 or frame_idx.max() >= n_frames:
+            raise ValueError(f'locs[{channel!r}] frame indices must be in '
+                             f'[0, {n_frames})')
+
+
+def _validate_geometry(multi, geom):
+    missing = [channel for channel in multi.channels
+               if channel not in geom.windows]
+    if missing:
+        raise ValueError(f'geometry is missing image channels {missing}')
+    if geom.reference not in multi.channels:
+        raise ValueError(f'geometry reference {geom.reference!r} is not an '
+                         'image channel')
+    expected_shape = multi.data.shape[-2:]
+    mismatched = {
+        channel: geom.windows[channel][2:]
+        for channel in multi.channels
+        if geom.windows[channel][2:] != expected_shape
+    }
+    if mismatched:
+        raise ValueError(f'geometry window sizes must match image shape '
+                         f'{expected_shape}: {mismatched}')
+
+
+def _map_channel_xy(xy, geom, source, target):
+    """Deprecated shim: see :func:`smlm.multiplex.coords.map_channel_xy`."""
+    return map_channel_xy(xy, geom, source, target)
+
+
+def _channel_to_reference_jacobian(geom, channel, reference):
+    """Linearize channel-to-reference coordinates at the window center."""
+    if channel == reference:
+        return np.eye(2)
+    _, _, height, width = geom.windows[channel]
+    center = np.array([(width - 1) / 2.0, (height - 1) / 2.0])
+    step = 1e-3
+    jacobian = np.empty((2, 2), dtype=float)
+    for axis in range(2):
+        delta = np.zeros(2, dtype=float)
+        delta[axis] = step
+        mapped = _map_channel_xy(
+            np.vstack((center + delta, center - delta)), geom, channel,
+            reference)
+        jacobian[:, axis] = (mapped[0] - mapped[1]) / (2.0 * step)
+    if not np.all(np.isfinite(jacobian)):
+        raise ValueError(f'non-finite registration Jacobian for '
+                         f'{channel!r} -> {reference!r}')
+    if abs(float(np.linalg.det(jacobian))) < 1e-8:
+        raise ValueError(f'singular registration Jacobian for '
+                         f'{channel!r} -> {reference!r}')
+    return jacobian
+
+
+# ---------------------------------------------------------------------------
+#  Registered point-cloud merge
+# ---------------------------------------------------------------------------
 def merge_registered(locs, geom: DualViewGeometry, *, reference='g',
-                     verbose: bool = False):
-    """把各通道定位搬到**参考分析坐标**后合并成一个点云。
+                     channels=None, verbose=False):
+    """Map selected channel localizations into ``reference`` and concatenate.
 
-    Parameters
-    ----------
-    locs : dict
-        ``{通道: Localizations}``, 坐标是该通道**分析窗口**的 local 坐标。
-
-    Returns
-    -------
-    (merged, parts)
-        ``merged`` 是合并后的 Localizations(参考分析坐标);
-        ``parts[ch]`` 是布尔掩码, 标记 ``merged`` 里哪些点来自该通道。
+    Returns the merged localization set and one boolean provenance mask per
+    selected channel. ``channels`` must include ``reference``.
     """
-    names = [reference] + [c for c in locs if c != reference]
-    chunks, parts, cursor = [], {}, 0
-    for ch in names:
-        L = locs.get(ch)
-        if L is None or len(L) == 0:
-            parts[ch] = np.zeros(0, bool)
-            continue
-        xy = geom.to_reference(np.column_stack([L.x, L.y]), ch)
-        n = len(L)
-        m = np.zeros(n, bool)
-        m[:] = True
-        parts[ch] = m
-        chunks.append((replace(L, x=xy[:, 0], y=xy[:, 1]), n))
-        cursor += n
-    if not chunks:
-        return Localizations(frame=np.zeros(0, int), x=np.zeros(0),
-                             y=np.zeros(0)), {c: np.zeros(0, bool) for c in locs}
+    available = list(geom.windows)
+    selected = _channel_names(channels, available, 'channels')
+    if reference not in selected:
+        raise ValueError(f'estimation channels must include reference '
+                         f'{reference!r}')
+    ordered = [reference] + [channel for channel in selected
+                             if channel != reference]
+
+    chunks = []
+    for channel in ordered:
+        if channel not in locs or locs[channel] is None:
+            raise ValueError(f'missing localizations for selected channel '
+                             f'{channel!r}')
+        current = locs[channel]
+        xy = _map_channel_xy(np.column_stack((current.x, current.y)),
+                             geom, channel, reference)
+        chunks.append((channel, current, xy))
 
     kw = {}
-    for f in _CONCAT_FIELDS:
-        vals = [getattr(c, f) for c, _ in chunks]
-        kw[f] = (np.concatenate([np.asarray(v) for v in vals])
-                 if all(v is not None for v in vals) else None)
+    for name in _CONCAT_FIELDS:
+        values = [
+            (xy[:, 0] if name == 'x' else
+             xy[:, 1] if name == 'y' else
+             getattr(current, name))
+            for _, current, xy in chunks
+        ]
+        kw[name] = (None if any(value is None for value in values) else
+                    np.concatenate([np.asarray(value) for value in values]))
+
     merged = Localizations(**kw)
 
-    # 掩码改成按合并后的顺序
-    out, pos = {}, 0
-    for ch in names:
-        n = len(locs[ch]) if (ch in locs and locs[ch] is not None) else 0
-        m = np.zeros(len(merged), bool)
-        m[pos:pos + n] = True
-        out[ch] = m
-        pos += n
+    parts = {}
+    offset = 0
+    for channel, current, _ in chunks:
+        mask = np.zeros(len(merged), dtype=bool)
+        mask[offset:offset + len(current)] = True
+        parts[channel] = mask
+        offset += len(current)
     if verbose:
-        cnt = ', '.join(f'{c}:{int(m.sum())}' for c, m in out.items())
-        print(f'  merged cloud {len(merged)} locs  ({cnt})')
-    return merged, out
+        counts = ', '.join(f'{channel}:{int(mask.sum())}'
+                           for channel, mask in parts.items())
+        print(f'  merged registered cloud: {len(merged)} localizations '
+              f'({counts}) in {reference!r} coordinates')
+    return merged, parts
 
 
 # ---------------------------------------------------------------------------
-#  估计
+#  Estimation
 # ---------------------------------------------------------------------------
-@dataclass
-class MultiDrift:
-    """多通道漂移结果。
+def _default_uncertainty_px(locs, channels, geom, reference):
+    """Median ``lp`` mapped from each channel's pixels into reference pixels.
 
-    traces : {通道: DriftTrace}
-        各通道**自己像素坐标**下的轨迹(可直接交给 ``DriftCorrector``)。
-    trace_ref : DriftTrace
-        在参考通道分析坐标里估计出来的那一条(源头)。
-    merged / parts
-        ``merge_registered`` 的输出, 便于事后检查合并点云。
-    control : DriftTrace
-        只用参考通道估的对照 —— 用来核对合并有没有带偏。
-    checks : dict
-        自检指标。
+    ``Localizations.lp`` carries the CRLB in **pixel** units (the Fisher matrix
+    is assembled in pixel coordinates), so no nm/pixel_size conversion applies.
     """
-    traces: dict
-    trace_ref: DriftTrace
-    merged: Localizations = None
-    parts: dict = field(default_factory=dict)
-    control: DriftTrace = None
-    checks: dict = field(default_factory=dict)
-    reference: str = 'g'
-
-    def __getitem__(self, ch):
-        return self.traces[ch]
-
-    def __repr__(self):
-        d = ', '.join(f'{c}:{t.total_drift:.2f}px' for c, t in
-                      self.traces.items())
-        return f'MultiDrift({d})'
-
-
-def _drift_to_channel(d_ref_xy, geom, ch, reference):
-    """参考分析坐标下的逐帧位移 -> ``ch`` 自己像素坐标下的位移。"""
-    cal = geom.calibs.get(ch)
-    if ch == reference or cal is None:
-        return np.asarray(d_ref_xy, float)
-    # 在该通道分析窗口中心取中心雅可比; 注意 jacobian_at 吃的是**标定 local**
-    _, _, h, w = geom.windows[ch]
-    c_ana = np.array([w / 2.0, h / 2.0])
-    p_cal = geom.to_calib_frame(c_ana[None], ch)[0]
-    J = cal.jacobian_at(p_cal)                 # d(ref)/d(ch)
-    return np.asarray(d_ref_xy, float) @ np.linalg.inv(J).T
+    values = []
+    for channel in channels:
+        current = locs[channel]
+        if current.lp is None:
+            continue
+        lp = np.asarray(current.lp, dtype=float)
+        if lp.ndim != 1 or len(lp) != len(current):
+            raise ValueError(f'locs[{channel!r}].lp must match the '
+                             'localization count')
+        valid = np.isfinite(lp) & (lp > 0)
+        if not np.any(valid):
+            continue
+        jacobian = _channel_to_reference_jacobian(
+            geom, channel, reference)
+        scale = np.sqrt(np.sum(jacobian ** 2) / 2.0)
+        values.append(lp[valid] * scale)
+    if not values:
+        raise ValueError('cannot infer drift uncertainty: selected '
+                         'localizations need finite positive lp values; '
+                         'otherwise pass uncertainty_px explicitly')
+    return float(np.median(np.concatenate(values)))
 
 
-def _resolve_locs_geom(data, locs, n_frames, geom):
-    """兼容两种调用: ``(multi, locs, n_frames=None)`` 或 ``(locs, geom, n_frames)``。"""
-    if hasattr(data, 'channels'):              # MultiImageStack
-        if locs is None:
-            raise TypeError('传 MultiImageStack 时还要给 locs={通道: Localizations}')
-        geom = geom if geom is not None else data.geometry(check_coverage=False)
-        n_frames = int(data.n_frames) if n_frames is None else int(n_frames)
-        return locs, geom, n_frames
-    # 旧写法: 第一个参数就是 {通道: Localizations}
-    if geom is None and hasattr(locs, 'windows'):      # (locs, geom, n)
-        locs, geom = data, locs
-    elif geom is None:
-        geom, locs = locs, data
-    else:
-        locs = data
-    if geom is None or not hasattr(geom, 'windows'):
-        raise TypeError('estimate_drift_multi 需要 geom(DualViewGeometry) '
-                        '或一个 MultiImageStack')
-    if n_frames is None:
-        raise TypeError('缺少 n_frames')
-    return locs, geom, int(n_frames)
-
-
-def estimate_drift_multi(data, locs=None, n_frames=None, *,
-                         frames_per_seg=10, do_stage2=True,
-                         uncertainty=None, reference='g', geom=None,
-                         control=True, verbose=True):
-    """多通道漂移估计: 配准 -> 合并 -> 一条轨迹 -> 换算回各通道。
+def estimate_drift_multi(multi, locs, *, drift_reference=None,
+                         estimate_channels=None, frames_per_seg=10,
+                         do_stage2=True, uncertainty_px=None,
+                         matched_pairs_threshold=30, r_scale=4.5,
+                         max_iter=20, geom=None, verbose=True):
+    """Estimate one registered drift and convert it to every channel.
 
     Parameters
     ----------
-    data : MultiImageStack
-        **推荐用法**: 窗口、偏移、各通道配准都在对象里, 不用另外传几何。
-    locs : dict
-        ``{通道: Localizations}``, 各通道分析窗口 local 坐标。
-    n_frames : int, optional
-        总帧数。用 MultiImageStack 时可省略。
-    geom : DualViewGeometry, optional
-        不给就从 ``data`` 现造。旧写法 ``estimate_drift_multi(locs, geom, n)``
-        仍然可用。
-    frames_per_seg : int
-        分段帧数。``CloudDriftEstimator`` 推荐 10; 用大值(如 100)会让**首段
-        完全没有被校正**(Stage 1 以第 0 段为参考, 段内漂移恒为 0), 别踩。
-    control : bool
-        额外只用参考通道估一条, 用于核对合并是否带偏。
+    multi : MultiImageStack
+        Supplies channels, frame count, pixel size and (by default) geometry.
+    locs : dict or sequence
+        ``{channel: Localizations}`` in each channel's own analysis-window
+        coordinates; a sequence ordered like ``multi.channels`` also works.
+    drift_reference : str
+        Channel whose pixel frame defines the estimated drift. Distinct from
+        ``coord_reference`` (``geom.reference``), which defines registration and
+        stays attached to the returned image stack.
+    estimate_channels : sequence of str
+        Channels contributing localizations to the merged cloud. Must include
+        ``drift_reference``; other channels still receive a converted trace.
 
     Returns
     -------
-    MultiDrift
+    dict
+        ``{channel: DriftTrace}`` for **every** image channel. Traces are in
+        each channel's own pixel frame and normalized so frame 0 is zero.
+        Provenance (drift/coord reference, estimation channels, uncertainty)
+        lives in ``trace.metadata``.
     """
+    if not isinstance(multi, MultiImageStack):
+        raise TypeError('multi must be a MultiImageStack')
+    if multi.n_frames <= 0:
+        raise ValueError('multi must contain at least one frame')
+    locs = _normalize_locs(multi, locs)
+    geom = (multi.geometry(check_coverage=False) if geom is None else geom)
+    if not isinstance(geom, DualViewGeometry):
+        raise TypeError('geom must be a DualViewGeometry')
+    _validate_geometry(multi, geom)
+
+    drift_reference = (multi.ref_name if drift_reference is None
+                       else drift_reference)
+    if drift_reference not in multi.channels:
+        raise ValueError(f'unknown drift reference channel '
+                         f'{drift_reference!r}; available: {multi.channels}')
+    channels = _channel_names(estimate_channels, multi.channels,
+                              'estimate_channels')
+    if drift_reference not in channels:
+        raise ValueError('estimate_channels must include the drift reference '
+                         f'{drift_reference!r}')
+
+    for channel in channels:
+        if locs[channel] is None:
+            raise ValueError(f'missing localizations for channel {channel!r}')
+        _validate_locs(locs[channel], channel, multi.n_frames)
+    merged, _parts = merge_registered(
+        locs, geom, reference=drift_reference, channels=channels,
+        verbose=verbose)
+    if len(merged) == 0:
+        raise ValueError('no localizations available for drift estimation')
+
+    uncertainty = (float(uncertainty_px) if uncertainty_px is not None
+                   else _default_uncertainty_px(
+                       locs, channels, geom, drift_reference))
+    if not np.isfinite(uncertainty) or uncertainty <= 0:
+        raise ValueError('uncertainty_px must be a positive finite value')
+
     from ..drift import CloudDriftEstimator
+    estimator = CloudDriftEstimator(
+        frames_per_seg=frames_per_seg,
+        uncertainty=uncertainty,
+        matched_pairs_threshold=matched_pairs_threshold,
+        do_stage2=do_stage2,
+        r_scale=r_scale,
+        max_iter=max_iter,
+        verbose=False,
+    )
+    estimated = estimator.estimate(merged, n_frames=multi.n_frames)
+    if estimated.n_frames != multi.n_frames or \
+            len(estimated.dy) != multi.n_frames:
+        raise ValueError(f'estimator returned an invalid drift length for a '
+                         f'{multi.n_frames}-frame stack')
+    dx_ref = np.asarray(estimated.dx, dtype=float)
+    dy_ref = np.asarray(estimated.dy, dtype=float)
+    if not np.all(np.isfinite(dx_ref)) or not np.all(np.isfinite(dy_ref)):
+        raise ValueError('drift estimator returned non-finite values')
+    d_ref = np.column_stack((dx_ref - dx_ref[0], dy_ref - dy_ref[0]))
 
-    locs, geom, n_frames = _resolve_locs_geom(data, locs, n_frames, geom)
-    if not geom.calibs:
-        raise ValueError('geom 里没有配准: 多通道漂移必须先有配准才能合并点云')
-
-    merged, parts = merge_registered(locs, geom, reference=reference,
-                                     verbose=verbose)
-
-    def _estimate(L, tag):
-        unc = uncertainty
-        if unc is None:
-            unc = float(np.median(L.lp)) if getattr(L, 'lp', None) is not None else 0.1
-        est = CloudDriftEstimator(frames_per_seg=frames_per_seg,
-                                  uncertainty=unc, do_stage2=do_stage2,
-                                  verbose=False)
-        tr = est.estimate(L, n_frames=n_frames)
-        if verbose:
-            print(f'  [{tag}] uncertainty={unc:.3f} px   '
-                  f'drift={tr.total_drift:.2f} px (参考分析坐标)')
-        return tr, unc
-
-    trace_ref, unc = _estimate(merged, 'merged')
-
-    # 换算到各通道自己的像素坐标
-    traces = {}
-    d_ref = np.column_stack([trace_ref.dx, trace_ref.dy])
-    for ch in geom.windows:
-        if ch != reference and (ch not in parts or parts[ch].sum() == 0):
-            continue
-        d_ch = _drift_to_channel(d_ref, geom, ch, reference)
-        traces[ch] = DriftTrace(dx=d_ch[:, 0], dy=d_ch[:, 1],
-                                pixel_size=trace_ref.pixel_size,
-                                metadata={'estimator': 'merged-multi',
-                                          'frame': f'{ch}-analysis'})
-
-    checks = {'uncertainty': float(unc), 'n_merged': int(len(merged)),
-              'n_per_channel': {c: int(m.sum()) for c, m in parts.items()},
-              'total_drift_ref': float(trace_ref.total_drift)}
-
-    ctrl = None
-    if control and reference in locs and locs[reference] is not None:
-        ctrl, _ = _estimate(locs[reference], f'{reference} only (对照)')
-        d = np.hypot(trace_ref.dx - ctrl.dx, trace_ref.dy - ctrl.dy)
-        checks['control_max_diff_px'] = float(np.nanmax(d))
-        if verbose:
-            print(f'  合并 vs 仅{reference}: max |Δdrift| = '
-                  f'{checks["control_max_diff_px"]:.3f} px (应是小量)')
-
-    return MultiDrift(traces=traces, trace_ref=trace_ref, merged=merged,
-                      parts=parts, control=ctrl, checks=checks,
-                      reference=reference)
+    provenance = {
+        'estimator': 'registered-multi',
+        'drift_reference': drift_reference,
+        'coord_reference': geom.reference,
+        'estimate_channels': list(channels),
+        'uncertainty_px': uncertainty,
+    }
+    drift = {}
+    for channel in multi.channels:
+        jacobian = _channel_to_reference_jacobian(
+            geom, channel, drift_reference)
+        try:
+            d_channel = np.linalg.solve(jacobian, d_ref.T).T
+        except np.linalg.LinAlgError as exc:
+            raise ValueError(f'cannot convert drift from {drift_reference!r} '
+                             f'to {channel!r}') from exc
+        drift[channel] = DriftTrace(
+            dx=d_channel[:, 0],
+            dy=d_channel[:, 1],
+            pixel_size=multi.pixel_size,
+            metadata={**provenance, 'channel': channel,
+                      'frame': f'{channel}-analysis'},
+        )
+    if verbose:
+        reference_total = float(np.hypot(*d_ref[-1]))
+        summary = ', '.join(f'{channel}:{trace.total_drift:.2f}px'
+                            for channel, trace in drift.items())
+        print(f'  estimated {drift_reference!r} drift: '
+              f'{reference_total:.2f} px from {channels}')
+        print(f'  converted drift to channels: {summary}')
+    return drift
 
 
 # ---------------------------------------------------------------------------
-#  校正
+#  Crop window
 # ---------------------------------------------------------------------------
-def common_crop(traces, shape, pad=4, extra_trim=0):
-    """各通道**共用**的居中裁切尺寸, 以及逐通道的漂移余量。
+@dataclass(frozen=True)
+class CropWindow:
+    """Crop window in frame-0 (drift reference) coordinates.
 
-    ``DriftCorrector`` 的裁切是居中的: 只要各通道用**同一个** (H_out, W_out),
-    校正后的图像就尺寸相同、原点相同, 可以直接叠成 ``MultiImageStack``。
-    所以这里取各通道所需余量的**最大值**。
+    ``y0``/``x0`` are the window origin in the corrected frame-0 frame, so the
+    kept region is ``[y0, y0 + height) x [x0, x0 + width)``. ``margins`` records
+    the pixels lost on each side to drift, padding and trimming, and
+    ``requirements`` keeps the per-channel drift minimum for diagnostics.
     """
-    H, W = int(shape[0]), int(shape[1])
-    ry = rx = 0
-    for tr in traces:
-        ry = max(ry, int(np.ceil(np.abs(np.asarray(tr.dy) - tr.dy[0]).max())))
-        rx = max(rx, int(np.ceil(np.abs(np.asarray(tr.dx) - tr.dx[0]).max())))
-    ry += int(pad) + int(extra_trim)
-    rx += int(pad) + int(extra_trim)
-    if H - 2 * ry <= 0 or W - 2 * rx <= 0:
-        raise ValueError(f'漂移 {max(ry, rx)} px + pad {pad} + extra_trim '
-                         f'{extra_trim} 超过窗口 {H}x{W}, 没有公共区域可用')
-    return (H - 2 * ry, W - 2 * rx), (ry, rx)
+    y0: int
+    x0: int
+    height: int
+    width: int
+    margins: dict = field(default_factory=dict)
+    requirements: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        for name in ('y0', 'x0', 'height', 'width'):
+            object.__setattr__(self, name,
+                               _pixel_count(getattr(self, name), name))
+        if self.height <= 0 or self.width <= 0:
+            raise ValueError('crop window must be non-empty')
+
+    @property
+    def shape(self):
+        return (self.height, self.width)
+
+    @property
+    def y(self):
+        return (self.y0, self.y0 + self.height)
+
+    @property
+    def x(self):
+        return (self.x0, self.x0 + self.width)
+
+    @property
+    def slices(self):
+        return (slice(*self.y), slice(*self.x))
+
+    def __repr__(self):
+        margins = ', '.join(f'{side}={value}'
+                            for side, value in self.margins.items())
+        return (f'CropWindow(y0={self.y0}, x0={self.x0}, '
+                f'height={self.height}, width={self.width}'
+                + (f'; margins: {margins}' if margins else '') + ')')
 
 
-def crop_for_trace(trace, shape, pad=4):
-    """单通道: 按实际漂移量算"居中裁切"的尺寸, 留出平移缓冲。"""
-    return common_crop([trace], shape, pad=pad)[0]
+def drift_side_needs(trace):
+    """Minimum pixels a single trace loses on each side of the frame.
 
-
-def correct_multi(multi, locs, md: MultiDrift, geom=None, *, pad=4, edge=5,
-                  extra_trim=0, verbose=True):
-    """按各通道自己的轨迹校正图像 + 定位, 并返回**跟着平移的几何对象**。
-
-    统一裁切 (关键)
-    ---------------
-    所有通道用同一个 ``(H_out, W_out)``, 因此校正后:
-
-    * 各通道图像**尺寸完全相同**;
-    * 局部坐标原点相同(逐像素可比对);
-    * 剩下的亚像素/形变差异仍由坐标层(``geom_c``)承载。
-
-    ``extra_trim`` 是在"漂移余量 + pad"之外再往里收的像素(漂移校正后嫌边缘脏时用)。
-    它被并入裁切尺寸而不是二次裁切, 所以定位与图像始终同步。
-
-    Returns
-    -------
-    (multi_c, locs_c, geom_c)
-        输入 ``MultiImageStack`` -> 返回 ``MultiImageStack``;
-        输入 ``{通道: ImageStack}`` -> 返回 dict(旧行为)。
+    Each side uses ``max(0, ...)`` of that trace's drift range, so a
+    one-directional drift does not waste the opposite edge.
     """
-    is_multi = hasattr(multi, 'channels')
-    if is_multi:
-        stacks = {c: multi.channel(c) for c in multi.channels}
-        if geom is None:
-            geom = multi.geometry(check_coverage=False)
-    else:
-        stacks = dict(multi)
-        if geom is None:
-            raise TypeError('传 {通道: ImageStack} 时必须给 geom')
+    if not isinstance(trace, DriftTrace):
+        raise TypeError('trace must be a DriftTrace')
+    dx = np.asarray(trace.dx, dtype=float)
+    dy = np.asarray(trace.dy, dtype=float)
+    if dx.ndim != 1 or dy.ndim != 1 or dx.size != dy.size or dx.size == 0:
+        raise ValueError('drift trace must have matching non-empty dx and dy '
+                         'arrays')
+    if not np.all(np.isfinite(dx)) or not np.all(np.isfinite(dy)):
+        raise ValueError('drift trace contains non-finite values')
+    return {
+        'top': int(np.ceil(max(0.0, -float(dy.min())))),
+        'bottom': int(np.ceil(max(0.0, float(dy.max())))),
+        'left': int(np.ceil(max(0.0, -float(dx.min())))),
+        'right': int(np.ceil(max(0.0, float(dx.max())))),
+    }
 
-    chs = [c for c in stacks if c in md.traces]
-    H = min(int(np.asarray(stacks[c].data).shape[-2]) for c in chs)
-    W = min(int(np.asarray(stacks[c].data).shape[-1]) for c in chs)
-    crop, (ry, rx) = common_crop([md.traces[c] for c in chs], (H, W),
-                                 pad=pad, extra_trim=extra_trim)
 
-    images, out_locs, new_windows = {}, {}, {}
-    for ch in chs:
-        tr = md.traces[ch]
-        corr = DriftCorrector(crop=crop, edge=edge)
-        img_c, (r0, c0, H_out, W_out) = corr.correct_image(stacks[ch], tr)
-        L_c, _ = corr.correct_locs(locs[ch], tr, window=(r0, c0, H_out, W_out))
-        images[ch] = img_c
-        out_locs[ch] = L_c
+def _per_side(value, name):
+    """Normalize ``int | {side: px} | 4-sequence`` into a per-side dict."""
+    if isinstance(value, Mapping):
+        unknown = [key for key in value if key not in _SIDES]
+        if unknown:
+            raise ValueError(f'{name} has unknown sides {unknown}; '
+                             f'use {list(_SIDES)}')
+        return {side: _pixel_count(value.get(side, 0), f'{name}[{side!r}]')
+                for side in _SIDES}
+    if isinstance(value, (int, np.integer)) and not isinstance(value, bool):
+        count = _pixel_count(value, name)
+        return {side: count for side in _SIDES}
+    values = list(value)
+    if len(values) != len(_SIDES):
+        raise ValueError(f'{name} must be an int, a {{side: px}} mapping, or '
+                         f'4 values in the order {list(_SIDES)}')
+    return {side: _pixel_count(item, f'{name}[{side!r}]')
+            for side, item in zip(_SIDES, values)}
 
-        y0, x0 = geom.windows[ch][:2]
-        new_windows[ch] = (y0 + r0, x0 + c0, H_out, W_out)
+
+def drift_requirements(drift, image_shape):
+    """Per-channel minimum pixels lost on each side, plus the combined need."""
+    height, width = _image_shape(image_shape)
+    per_channel = {channel: drift_side_needs(trace)
+                   for channel, trace in _drift_traces(drift).items()}
+    combined = {side: max(need[side] for need in per_channel.values())
+                for side in _SIDES}
+    if combined['top'] + combined['bottom'] >= height or \
+            combined['left'] + combined['right'] >= width:
+        raise ValueError(
+            f'drift needs margins {combined} for a {height}x{width} window; '
+            'no common area remains')
+    return per_channel, combined
+
+
+def drift_crop_window(drift, image_shape, *, pad=0, extra_trim=0):
+    """Smallest common window that keeps every channel's drifted frames valid.
+
+    ``pad`` covers the subpixel interpolation boundary and ``extra_trim`` is an
+    additional trim. Both accept an int applied to all sides, a ``{side: px}``
+    mapping, or 4 values in the order ``(top, bottom, left, right)``. The drift
+    requirement is the maximum across channels, so every channel keeps the same
+    window. The result is expressed in frame-0 coordinates.
+    """
+    height, width = _image_shape(image_shape)
+    pad = _per_side(pad, 'pad')
+    extra = _per_side(extra_trim, 'extra_trim')
+    per_channel, need = drift_requirements(drift, (height, width))
+    margins = {side: need[side] + pad[side] + extra[side] for side in _SIDES}
+    out_height = height - margins['top'] - margins['bottom']
+    out_width = width - margins['left'] - margins['right']
+    if out_height <= 0 or out_width <= 0:
+        raise ValueError(
+            f'margins {margins} (drift {need} + pad {pad} + trim {extra}) '
+            f'leave no valid area in a {height}x{width} window')
+    return CropWindow(
+        y0=margins['top'], x0=margins['left'],
+        height=out_height, width=out_width,
+        margins=margins, requirements=per_channel,
+    )
+
+
+def _as_window(window):
+    if isinstance(window, CropWindow):
+        return window
+    try:
+        values = tuple(window)
+    except TypeError:
+        raise TypeError('window must be a CropWindow or '
+                        '(y0, x0, height, width)') from None
+    if len(values) != 4:
+        raise ValueError('window must be (y0, x0, height, width)')
+    return CropWindow(y0=values[0], x0=values[1],
+                      height=values[2], width=values[3])
+
+
+def _window_margins(window, shape):
+    height, width = shape
+    return {
+        'top': window.y0,
+        'left': window.x0,
+        'bottom': height - window.y0 - window.height,
+        'right': width - window.x0 - window.width,
+    }
+
+
+def _window_in_bounds(window, need, shape):
+    """Ensure the window fits the region left by every channel's drift."""
+    margins = _window_margins(window, shape)
+    if min(margins.values()) < 0:
+        raise ValueError(
+            f'window {window.shape} at ({window.y0}, {window.x0}) does not fit '
+            f'a {shape[0]}x{shape[1]} image')
+    too_small = {side: (margins[side], need[side])
+                 for side in _SIDES if margins[side] < need[side]}
+    if too_small:
+        detail = ', '.join(f'{side}: have {have} < need {required}'
+                           for side, (have, required) in too_small.items())
+        raise ValueError(
+            f'window is too large for the drift ({detail}); build it with '
+            'drift_crop_window(...) or trim more pixels')
+    return margins
+
+
+# ---------------------------------------------------------------------------
+#  Correction
+# ---------------------------------------------------------------------------
+def correct_multi(multi, locs, drift, *, window, geom=None, edge=5,
+                  interpolation_order=1, fill=0.0, verbose=True):
+    """Translate every channel, then crop to one explicit common window.
+
+    ``window`` is required and expressed in frame-0 coordinates; build it with
+    :func:`drift_crop_window`. It is validated against every channel's drift so
+    interpolation borders cannot silently enter the result.
+
+    Returns ``(multi_corr, locs_corr)`` where ``locs_corr`` maps **every** image
+    channel (including channels that did not contribute to estimation) to its
+    corrected, cropped localizations.
+    """
+    if not isinstance(multi, MultiImageStack):
+        raise TypeError('multi must be a MultiImageStack')
+    drift = _drift_traces(drift)
+    locs = _normalize_locs(multi, locs)
+    geom = multi.geometry(check_coverage=False) if geom is None else geom
+    if not isinstance(geom, DualViewGeometry):
+        raise TypeError('geom must be a DualViewGeometry')
+    _validate_geometry(multi, geom)
+
+    missing = [channel for channel in multi.channels if channel not in drift]
+    if missing:
+        raise ValueError(f'missing drift traces for channels {missing}')
+    for channel in multi.channels:
+        trace = drift[channel]
+        if trace.n_frames != multi.n_frames or \
+                len(np.asarray(trace.dy)) != multi.n_frames:
+            raise ValueError(f'{channel!r} drift has {trace.n_frames} frames, '
+                             f'expected {multi.n_frames}')
+
+    edge = _pixel_count(edge, 'edge')
+    interpolation_order = _pixel_count(
+        interpolation_order, 'interpolation_order')
+    if interpolation_order > 5:
+        raise ValueError('interpolation_order must be between 0 and 5')
+    if not np.isfinite(fill):
+        raise ValueError('fill must be finite')
+    fill = float(fill)
+
+    window = _as_window(window)
+    height, width = multi.data.shape[-2:]
+    channel_drift = {channel: drift[channel] for channel in multi.channels}
+    _, need = drift_requirements(channel_drift, (height, width))
+    margins = _window_in_bounds(window, need, (height, width))
+
+    images = {}
+    out_locs = {}
+    new_windows = {}
+    for channel in multi.channels:
+        trace = drift[channel]
+        current_locs = locs[channel]
+        if current_locs is not None:
+            _validate_locs(current_locs, channel, multi.n_frames)
+
+        corrector = DriftCorrector(
+            edge=edge, fill=fill, order=interpolation_order)
+        image, crop = corrector.correct_image(
+            multi.channel(channel), trace,
+            window=(window.y0, window.x0, window.height, window.width))
+        corrected_locs = None
+        if current_locs is not None:
+            corrected_locs, _ = corrector.correct_locs(
+                current_locs, trace, window=crop)
+        images[channel] = image
+        out_locs[channel] = corrected_locs
+
+        y0, x0, _, _ = geom.windows[channel]
+        r0, c0, crop_height, crop_width = crop
+        new_windows[channel] = (y0 + r0, x0 + c0, crop_height, crop_width)
         if verbose:
-            print(f'  [{ch}] crop={crop} (+{r0},{c0})   '
-                  f'locs kept {len(L_c)}/{len(locs[ch])}   '
-                  f'total drift {tr.total_drift:.2f} px')
+            kept = ('n/a' if corrected_locs is None
+                    else f'{len(corrected_locs)}/{len(current_locs)}')
+            print(f'  [{channel}] locs kept {kept}; '
+                  f'total drift {trace.total_drift:.2f} px')
 
-    if len({(w[2], w[3]) for w in new_windows.values()}) != 1:
-        raise RuntimeError('校正后各通道尺寸不一致 —— 居中裁切的前提被打破了')
-
-    geom_c = DualViewGeometry(
-        windows=new_windows, calib=dict(geom.calibs),
-        calib_windows=dict(geom.calib_windows or {}),
-        reference=geom.reference, roi=geom.roi, margin=0,
-        check_coverage=False)          # 漂移裁切只会更靠内, 不用再查外推
-
-    if not is_multi:
-        return images, out_locs, geom_c
-
-    data = np.stack([np.asarray(images[c].data) for c in multi.channels], axis=0)
-    offs = np.array([new_windows[c][:2] for c in multi.channels], dtype=int)
-    meta = dict(multi.metadata)
-    meta['drift_crop'] = {'size': [int(crop[0]), int(crop[1])],
-                          'margin_rc': [int(ry), int(rx)],
-                          'pad': int(pad), 'extra_trim': int(extra_trim)}
-    return multi.with_data(data, offsets=offs, metadata=meta), out_locs, geom_c
+    data = np.stack(
+        [np.asarray(images[channel].data) for channel in multi.channels],
+        axis=0)
+    offsets = np.asarray(
+        [new_windows[channel][:2] for channel in multi.channels], dtype=int)
+    provenance = drift[multi.channels[0]].metadata
+    metadata = dict(multi.metadata)
+    metadata['drift_crop'] = {
+        'window': [window.y0, window.x0, window.height, window.width],
+        'margins': {side: int(value) for side, value in margins.items()},
+        'drift_requirements': need,
+        'edge': edge,
+        'interpolation_order': interpolation_order,
+        'fill': fill,
+        'coord_reference': geom.reference,
+        'drift_reference': provenance.get('drift_reference'),
+        'estimate_channels': list(provenance.get('estimate_channels', [])),
+    }
+    multi_corr = MultiImageStack(
+        data=data,
+        channels=list(multi.channels),
+        reference=multi.index(geom.reference),
+        reg=dict(geom.calibs),
+        offsets=offsets,
+        pixel_size=multi.pixel_size,
+        metadata=metadata,
+    )
+    if verbose:
+        print(f'  crop window: {window}')
+        print(f'  corrected stack: {multi_corr}')
+    return multi_corr, out_locs

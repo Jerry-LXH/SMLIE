@@ -10,6 +10,10 @@ COLS = ['idx', 't_bleach_s', 'frame_j', 'lag', 'x_px', 'y_px', 'n_pre', 'n_on',
         'I_A_pre', 'I_D_pre', 'I_A_post', 'I_D_post', 'S_A',
         'E', 'E_don', 'snr_A', 'gamma', 'alpha', 'beta']
 
+# 未筛选 trace 的长表
+TRACE_COLS = ['emitter_id', 'frame', 't_s', 'x_px', 'y_px',
+              'I_donor', 'I_acceptor', 'bg_donor', 'bg_acceptor']
+
 
 def _num(v, nd):
     v = float(v)
@@ -50,6 +54,39 @@ def save_csv(results, path, cal=None, *, centres=None, verbose=True):
     if verbose:
         print(f'saved {len(rows)} rows -> {path}  '
               f'({os.path.getsize(path)} bytes, {len(COLS)} cols)')
+    return path
+
+
+def save_traces_csv(traces_d, traces_a, t_s, path, verbose=True):
+    """双通道 trace 的长表: 一行 = 一个分子的一帧。
+
+    ``traces_d`` / ``traces_a`` 必须按 emitter_id 对齐(供体=绿, 受体=红)。
+    未扣背景的积分强度可自己还原: ``raw = I + bg``。
+
+    传全部分子就是 ``traces_all.csv``; 只传通过判据的那些就是 ``good_traces.csv``
+    —— 两者格式完全相同, 下游读法一样。
+    """
+    n = int(len(t_s))
+    nan = np.full(n, np.nan)
+    fmt = ['%.0f', '%.0f', '%.3f', '%.2f', '%.2f', '%.1f', '%.1f', '%.1f', '%.1f']
+    d = os.path.dirname(os.path.abspath(path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, 'w', encoding='utf-8-sig', newline='') as fh:
+        fh.write(','.join(TRACE_COLS) + '\n')
+        for td, ta in zip(traces_d, traces_a):
+            blk = np.column_stack([
+                np.full(n, int(td.emitter_id)), np.arange(n),
+                np.asarray(t_s, float),
+                np.full(n, float(td.x)), np.full(n, float(td.y)),
+                np.asarray(td.intensity, float)[:n],
+                np.asarray(ta.intensity, float)[:n],
+                np.asarray(td.meta.get('bg_flux', nan), float)[:n],
+                np.asarray(ta.meta.get('bg_flux', nan), float)[:n]])
+            np.savetxt(fh, blk, fmt=fmt, delimiter=',')
+    if verbose:
+        print(f'saved {len(traces_d)} traces x {n} frames -> {path}  '
+              f'({os.path.getsize(path)} bytes, {len(TRACE_COLS)} cols)')
     return path
 
 

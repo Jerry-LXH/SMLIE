@@ -96,7 +96,7 @@ flowchart TD
     H -->|"imgprocess.DriftCorrector.apply()"| I[(corr_image: ImageStack<br/>corr_locs: Localizations)]
     I -->|"analyze_emitters()<br/>GapClosingLinker+Filter"| J[list[Emitter]<br/>loc_idx 回查源]
     J -->|"collect_statistics()"| K[EmitterStats]
-    J -->|"ApertureTraceExtractor.extract()"| L[list[Trace]<br/>稠密强度序列]
+    J -->|"extract_channel()"| L[list[Trace]<br/>稠密强度序列]
     L -->|"analyze_traces()<br/>get_analyzer('changepoint')"| M[list[StateResult]<br/>态序列+漂白+寿命]
     I -.->|"也可以直接用 corr_locs"| J
 ```
@@ -142,7 +142,7 @@ from smlm.io import run_cached
 from smlm.drift import CloudDriftEstimator
 from smlm.imgprocess import DriftCorrector      # 校正侧在 imgprocess
 from smlm.emitter import analyze_emitters, collect_statistics
-from smlm.trace import ApertureTraceExtractor, analyze_traces
+from smlm.trace import ApertureSpec, extract_channel, analyze_traces
 
 raw     = load_raw("xxx.sif")                              # RawDataset
 image   = EMCCD(conv_factor=5.75, em_gain=raw.em_gain).process(raw, pixel_size=106.6)  # ImageStack
@@ -154,6 +154,10 @@ drift   = CloudDriftEstimator(...).estimate(locs)          # DriftTrace
 corr_image, corr_locs, keep = DriftCorrector(crop=(257,257)).apply(drift, image=stack, locs=locs)
 emitters, _ = analyze_emitters(corr_locs, n_frames=None, ...)   # list[Emitter]
 stats   = collect_statistics(emitters, locs, raw.exposure_time, 0)  # EmitterStats
-traces  = ApertureTraceExtractor(edge=3).extract(emitters, corr_image.data, corr_image.n_frames)  # list[Trace]
+centers_yx = np.array([[e.centroid[1], e.centroid[0]] for e in emitters])   # [row, col]
+traces  = extract_channel(corr_image.data, centers_yx,              # list[Trace]
+                          spec=ApertureSpec(mode='hard', radius=3),
+                          n_frames=corr_image.n_frames, locs=corr_locs,
+                          mask_centers_yx=None)      # None = ? centers_yx ??
 results = analyze_traces(traces, method="changepoint", penalty=3, bleach_tail=50)       # list[StateResult]
 ```

@@ -2,6 +2,7 @@
 import os
 import json
 import hashlib
+import zipfile
 import numpy as np
 from ..datatypes import Localizations
 
@@ -39,6 +40,32 @@ def data_fingerprint(stack, n_probe=32):
     h.update(json.dumps(describe(stack.metadata),
                         sort_keys=True, default=str).encode())
     return h.hexdigest()
+
+
+def image_signature(stack):
+    """Return a lightweight signature for a 3D image stack.
+
+    The signature covers the full shape and dtype plus the first frame's
+    content. It is intended for fast cache validation, not as a full-stack
+    content fingerprint.
+    """
+    arr = np.asarray(stack.data)
+    if arr.ndim != 3:
+        raise ValueError(f'expected a 3D image stack, got shape {arr.shape}')
+    if arr.shape[0] == 0:
+        raise ValueError('cannot validate an empty image stack')
+
+    first_frame = np.ascontiguousarray(arr[0])
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    digest.update(arr.dtype.str.encode())
+    digest.update(first_frame.tobytes())
+    return {
+        'shape': list(arr.shape),
+        'dtype': arr.dtype.str,
+        'first_frame_hash': digest.hexdigest(),
+    }
+
 
 # ---------------------------------------------------------------------------
 #  把 method / detector / localizer 递归转成可 JSON 化的配置字典
@@ -78,10 +105,12 @@ def config_hash(config):
 # ---------------------------------------------------------------------------
 #  保存 / 加载 Localizations
 # ---------------------------------------------------------------------------
-def save_locs(locs, src_path, method=None, data_hash=None, extra_meta=None):
+def save_locs(locs, src_path, method=None, data_hash=None, extra_meta=None,
+              compressed=True):
     path = result_path(src_path)
     arrays = {}
-    meta = {'fields': [], 'extra_array': [], 'extra_scalar': {}}
+    meta = {'format_version': 1,
+            'fields': [], 'extra_array': [], 'extra_scalar': {}}
 
     for name in _ARRAY_FIELDS:
         v = getattr(locs, name, None)
@@ -109,56 +138,128 @@ def save_locs(locs, src_path, method=None, data_hash=None, extra_meta=None):
         meta['meta'] = extra_meta
 
     arrays['__meta__'] = np.array(json.dumps(meta, default=str))
-    np.savez_compressed(path, **arrays)
+    if compressed:
+        np.savez_compressed(path, **arrays)
+    else:
+        np.savez(path, **arrays)
     print(f"[cache] saved {len(locs)} locs -> {path}")
     return path
 
 
-def load_locs(src_path):
-    """返回 (Localizations, meta) 或 (None, None)。"""
+def load_locs(src_path, *, strict=False):
+    """Load cached localizations, optionally requiring and validating the file.
+
+    With ``strict=False``, a missing cache returns ``(None, None)`` for
+    legacy callers. Strict mode raises on missing or malformed cache files.
+    Set ``compressed=False`` in :func:`save_locs` to avoid decompression cost
+    for caches intended for repeated direct loads.
+    """
     path = result_path(src_path)
     if not os.path.exists(path):
+        if strict:
+            raise FileNotFoundError(f'localization cache not found: {path}')
         return None, None
 
-    npz = np.load(path, allow_pickle=False)
-    meta = json.loads(str(npz['__meta__']))
+    try:
+        with np.load(path, allow_pickle=False) as npz:
+            if '__meta__' not in npz.files:
+                raise ValueError('missing __meta__')
+            meta = json.loads(str(npz['__meta__'].item()))
+            fields = meta.get('fields')
+            if not isinstance(fields, list):
+                raise ValueError('invalid fields metadata')
+            required = {'frame', 'x', 'y', 'photons', 'bg'}
+            if not required.issubset(fields):
+                raise ValueError('missing required localization fields')
+            if strict and meta.get('format_version') != 1:
+                raise ValueError('unsupported or missing cache format version')
 
-    kw = {f: npz[f] for f in meta['fields']}
-    extra = dict(meta.get('extra_scalar', {}))
-    for k in meta.get('extra_array', []):
-        extra[k] = npz['extra__' + k]
-    kw['extra'] = extra
+            kw = {}
+            lengths = set()
+            for name in fields:
+                if name not in npz.files:
+                    raise ValueError(f'missing array {name!r}')
+                value = np.asarray(npz[name])
+                if value.ndim == 0:
+                    raise ValueError(f'localization array {name!r} is scalar')
+                lengths.add(value.shape[0])
+                kw[name] = value
+            if len(lengths) != 1:
+                raise ValueError('localization arrays have different lengths')
+
+            extra = dict(meta.get('extra_scalar', {}))
+            for name in meta.get('extra_array', []):
+                key = 'extra__' + name
+                if key not in npz.files:
+                    raise ValueError(f'missing extra array {name!r}')
+                extra[name] = np.asarray(npz[key])
+            kw['extra'] = extra
+    except (KeyError, OSError, ValueError, zipfile.BadZipFile) as exc:
+        if strict:
+            raise ValueError(f'invalid localization cache {path}: {exc}') from exc
+        raise
 
     return Localizations(**kw), meta
 
 
+def save_cached_locs(locs, stack, src_path, *, method=None, filter_kw=None,
+                     compressed=False):
+    """Save filtered localizations with the image signature used by run_cached."""
+    frame = np.asarray(locs.frame)
+    if (frame.size and
+            (np.any(frame < 0) or np.any(frame >= int(stack.shape[0])))):
+        raise ValueError('localization frame indices outside the input stack')
+
+    return save_locs(
+        locs,
+        src_path,
+        method=method,
+        extra_meta={
+            'localization_stage': 'filtered',
+            'image_signature': image_signature(stack),
+            'filter_config': describe(filter_kw or {}),
+            'pixel_size': (None if stack.pixel_size is None
+                           else float(stack.pixel_size)),
+        },
+        compressed=compressed,
+    )
+
+
 # ---------------------------------------------------------------------------
-#  带缓存的运行入口
+# Strict cache reader. Callers explicitly choose cache read versus recompute.
 # ---------------------------------------------------------------------------
-def combined_key(method, stack):
-    return {
-        'config_hash': config_hash(describe(method)),
-        'data_hash': data_fingerprint(stack),
-    }
+def run_cached(stack, src_path, *, read_cache=False):
+    """Load cached filtered localizations after validating the image stack.
 
+    With ``read_cache=False`` this is a no-op and returns ``(None, None)``.
+    When enabled, missing, legacy, malformed, or image-incompatible caches
+    raise instead of silently triggering recomputation.
+    """
+    if not isinstance(read_cache, bool):
+        raise TypeError('read_cache must be a bool')
+    if not read_cache:
+        return None, None
+    if src_path is None:
+        raise ValueError('src_path is required when read_cache=True')
 
-def run_cached(method, stack, src_path, force=False):
-    key = combined_key(method, stack)
-
-    if not force:
-        locs, meta = load_locs(src_path)
-        if locs is not None:
-            cached = {'config_hash': meta.get('config_hash'),
-                      'data_hash': meta.get('data_hash')}
-            if cached == key:
-                print(f"[cache] hit -> {result_path(src_path)} ({len(locs)} locs)")
-                return locs
-            # 告诉用户到底是哪一环变了
-            if cached['config_hash'] != key['config_hash']:
-                print("[cache] method config changed, recompute.")
-            if cached['data_hash'] != key['data_hash']:
-                print("[cache] input stack changed (preprocess/camera), recompute.")
-
-    locs = method.run(stack)
-    save_locs(locs, src_path, method=method, data_hash=key['data_hash'])
-    return locs
+    locs, meta = load_locs(src_path, strict=True)
+    cache_info = meta.get('meta')
+    if not isinstance(cache_info, dict):
+        raise ValueError(
+            f'localization cache {result_path(src_path)} is missing '
+            'validation metadata')
+    if cache_info.get('localization_stage') != 'filtered':
+        raise ValueError(
+            f'localization cache {result_path(src_path)} does not contain '
+            'filtered localizations; recompute with read_cache=False')
+    if cache_info.get('image_signature') != image_signature(stack):
+        raise ValueError(
+            f'localization cache {result_path(src_path)} does not match '
+            'the input image shape, dtype, or first frame')
+    if (locs.frame.size and
+            (np.any(locs.frame < 0)
+             or np.any(locs.frame >= int(stack.shape[0])))):
+        raise ValueError(
+            f'localization cache {result_path(src_path)} contains frame '
+            'indices outside the input stack')
+    return locs, meta

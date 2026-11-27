@@ -28,11 +28,15 @@ class EfficiencySpec:
     post_win: int = 400         # 台阶右侧最多取多少帧
     post_thr_d: float = 100.0   # post 窗口里只平均"绿光 > 该值"的帧
     min_on: int = 10            # post 窗口内至少要有这么多帧在阈值以上
+    min_pre: int = 0            # pre 窗最少要有多少帧 (0 = 只要求 ≥2)
     clip_n: float = 3.0
     clip_iter: int = 2
 
     def report(self):
-        return (f'EfficiencySpec(pre≤{self.pre_win} 帧, post≤{self.post_win} 帧, '
+        pre = f'pre≤{self.pre_win} 帧'
+        if self.min_pre:
+            pre += f' (至少 {self.min_pre})'
+        return (f'EfficiencySpec({pre}, post≤{self.post_win} 帧, '
                 f'post 只取绿>{self.post_thr_d:.0f}, 至少 {self.min_on} 帧)')
 
 
@@ -61,7 +65,18 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
     alpha = float(cal.alpha) if np.isfinite(cal.alpha) else 0.0
     beta = float(cal.beta) if np.isfinite(cal.beta) else 0.0
 
-    out, stats = [], {'n_short': 0, 'n_noon': 0, 'n_drop': 0, 'n_in': len(events)}
+    out, stats = [], {'n_short': 0, 'n_noon': 0, 'n_drop': 0, 'n_pre': 0,
+                      'n_in': len(events)}
+    n_tr = min(len(traces_a), len(traces_d))
+    bad = [int(ev.emitter_id) for ev in events
+           if not 0 <= int(ev.emitter_id) < n_tr]
+    if bad:
+        # 负下标会静默读到别的 trace, 必须响亮报错
+        raise ValueError(
+            f'{len(bad)} 个事件的 emitter_id 越界 (合法范围 [0, {n_tr - 1}]): '
+            f'{bad[:8]}{" ..." if len(bad) > 8 else ""}\n'
+            f'  常见原因: 事件不是从 scan_steps / select_pairs 出来的, '
+            f'emitter_id 还留着 find_step 的 -1。')
     for ev in events:
         i, j = int(ev.emitter_id), int(ev.frame)
         ya = np.asarray(traces_a[i].intensity, float)
@@ -70,6 +85,9 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
         l0, l1 = max(0, j - spec.pre_win), j
         p0, p1 = j, min(n, j + spec.post_win)
         if l1 - l0 < 2 or p1 - p0 < 2:
+            continue
+        if l1 - l0 < spec.min_pre:
+            stats['n_pre'] += 1
             continue
         if l1 - l0 < spec.pre_win:
             stats['n_short'] += 1
@@ -108,8 +126,17 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
 
 
 def _report(res, stats, spec, gamma, alpha, beta):
+    for k, msg in (('n_pre', f'pre 窗不足 min_pre={spec.min_pre} 帧'),
+                   ('n_short', f'pre 不足 {spec.pre_win} 帧'),
+                   ('n_noon', f'post 窗内绿 > {spec.post_thr_d:.0f} 的帧不足 '
+                              f'{spec.min_on}'),
+                   ('n_drop', '分母 ~0 / I_D^post ≤ 0 / 非有限')):
+        if stats[k]:
+            print(f'  {msg}: {stats[k]} 条')
     if not res:
-        print('[!] 没有分子能算出 E。')
+        print(f'[!] {stats.get("n_in", 0)} 个事件一条都没算出 E。'
+              f'上面列的就是卡住的地方; 若一条原因都没列, '
+              f'说明窗口长度不够 (pre/post < 2 帧)。')
         return
     E = np.array([r.E for r in res])
     ED = np.array([r.E_don for r in res])
@@ -117,11 +144,6 @@ def _report(res, stats, spec, gamma, alpha, beta):
     print(f'窗口: pre ≤ {spec.pre_win} 帧 (中位 {np.median([r.n_pre for r in res]):.0f})'
           f'   post ≤ {spec.post_win} 帧, 只取绿 > {spec.post_thr_d:.0f}'
           f' (中位 {np.median([r.n_on for r in res]):.0f})')
-    for k, msg in (('n_short', f'pre 不足 {spec.pre_win} 帧'),
-                   ('n_noon', f'post 亮帧不足 {spec.min_on}'),
-                   ('n_drop', '分母 ~0 / I_D^post≤0')):
-        if stats[k]:
-            print(f'  {msg}: {stats[k]} 条')
     print(f'\nE 分布 (n = {len(res)}, 未截断):')
     print(f'  中位 {np.median(E):.3f}   p16~p84 = '
           f'{np.percentile(E, 16):.3f}~{np.percentile(E, 84):.3f}')

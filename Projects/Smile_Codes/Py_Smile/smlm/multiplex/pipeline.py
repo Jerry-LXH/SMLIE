@@ -10,29 +10,39 @@
         order='auto', cap_per_file=2000)
     calib.save(r'...\\dualcal_v2.npz')
 
+For general multichannel inputs, ``pair_multichannel_files(files, roi)`` returns
+one merged ``PairSet`` per moving channel, all referenced to the selected
+channel (channel 0 by default). ``fit_multichannel_pairs(pairs, roi)`` fits
+those pairs and returns channel-aligned calibrations with the reference slot
+set to ``None``.
+
 要点:
   - 每个文件**独立配对**(不能跨文件配), 拟合时再合并 —— 因为不同文件的
     粗偏移/漂移状态不一样, 混在一起配会互相干扰。
   - 合并时按文件配额抽样, 避免亮文件主导。
-  - 定位结果走 ``run_cached``, 同一文件重复跑不会重算。
+  - ``localize_channel`` 可显式读取或覆盖包含过滤后定位的缓存。
 """
 from __future__ import annotations
 
 import os
+import warnings
 import numpy as np
 
-from ..datatypes import ImageStack
+from ..datatypes import ImageStack, MultiImageStack
 from ..camera import EMCCD
-from ..localize import ClassicalPipeline, LocalMaxDetector, MLELocalizer, filter_locs
-from ..io import load_raw, run_cached
+from ..localize import (ClassicalPipeline, LocalMaxDetector, MLELocalizer,
+                        localize_stack)
+from ..io import load_raw
 
 from .transform import DualViewCalibration, NPZ_VERSION
-from .pair import PairSet, pair_channels, merge_pairs
+from .pair import PairSet, pair_channels, pair_multichannels, merge_pairs
 from .channels import (DualViewROI, split_dual_view, cut_pair,
                        refine_coarse_offset, check_drift_margin,
                        seam_windows, split_from_crops, windows_from_crops,
                        DEFAULT_SEAM)
 from .fit import fit_transform, residual_report
+from .roi import MultichannelROI
+from .bundle import MultiChannelCalibrationBundle
 
 # ---------------------------------------------------------------------------
 #  标定用的默认参数 (分子密度低、要求干净多过要求灵敏)
@@ -77,35 +87,23 @@ def _mean_stack(stack, frame_mode='mean', frame_window=None):
 
 
 def localize_channel(stack, *, k_sigma=1.5, det_kw=None, loc_kw=None,
-                     filt_kw=None, src_path=None, verbose=False, tag=''):
-    """在一个通道上跑 detect + localize + filter, 带缓存。
-
-    Returns
-    -------
-    Localizations (坐标为通道 local 坐标)
-    """
-    # LocalMaxDetector 的 verbose 默认是 True, 不显式传就会一直打逐帧进度;
-    # 这里让 det_kw 的 verbose 跟随本函数的 verbose (显式给了 det_kw['verbose'] 则尊重它)。
+                     filt_kw=None, src_path=None, read_cache=False,
+                     verbose=False, tag=''):
+    """Compatibility wrapper using calibration defaults for one stack."""
     det_kw = {**CALIB_DET_KW, 'verbose': verbose, **(det_kw or {})}
     loc_kw = {**CALIB_LOC_KW, **(loc_kw or {})}
     filt_kw = {**CALIB_FILT_KW, **(filt_kw or {})}
-
-    det = LocalMaxDetector(k_sigma=float(k_sigma), **det_kw)
-    loc = MLELocalizer(**loc_kw)
-    method = ClassicalPipeline(detector=det, localizer=loc)
-
-    # LocalizationMethod 的接口是 .run(stack); run_cached 内部也是调 .run(),
-    # 所以这里两条路径必须都用 .run(), 不能用 method(stack)。
-    locs = method.run(stack) if src_path is None \
-        else run_cached(method, stack, src_path)
-
-    if verbose:
-        print(f'  [{tag}] {len(locs)} raw locs')
-    locs = filter_locs(locs, verbose=verbose, **filt_kw)
-    if verbose:
-        print(f'  [{tag}] {len(locs)} locs after filter '
-              f'(k_sigma={k_sigma})')
-    return locs
+    return localize_stack(
+        stack,
+        k_sigma=k_sigma,
+        det_kw=det_kw,
+        loc_kw=loc_kw,
+        filt_kw=filt_kw,
+        src_path=src_path,
+        read_cache=read_cache,
+        verbose=verbose,
+        tag=tag,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +114,7 @@ def calib_one_file(path, *, roi=None, split_x=None, row_range=None,
                    frame_window=None, pixel_size=None,
                    k_sigma=None, det_kw=None, loc_kw=None, filt_kw=None,
                    tols=CALIB_PAIR_TOLS, seam=DEFAULT_SEAM, crops=None,
-                   verbose=True):
+                   read_cache=False, verbose=True):
     """处理一个文件, 返回 (PairSet, DualViewROI, 实际窗口 dict)。
 
     Parameters
@@ -129,6 +127,8 @@ def calib_one_file(path, *, roi=None, split_x=None, row_range=None,
     seam : int
         仅在没给 ``crops`` 时生效: 两通道各让出多少 px。默认 0,
         因为"该让多少"取决于光路和焦面, 不该由模块拍一个常数。
+    read_cache : bool
+        True 时严格读取并验证已有定位缓存; False 时重新定位并覆盖缓存。
     """
     cam_kw = {**CALIB_CAM, **(cam_kw or {})}
     cam = cam or EMCCD(**cam_kw)
@@ -171,10 +171,12 @@ def calib_one_file(path, *, roi=None, split_x=None, row_range=None,
     loc_g = localize_channel(stack_g, k_sigma=ks['green'], det_kw=det_kw,
                              loc_kw=loc_kw, filt_kw=filt_kw,
                              src_path=f'{os.path.splitext(path)[0]}_green_{tag_g}',
+                             read_cache=read_cache,
                              verbose=verbose, tag=f'{name} green')
     loc_r = localize_channel(stack_r, k_sigma=ks['red'], det_kw=det_kw,
                              loc_kw=loc_kw, filt_kw=filt_kw,
                              src_path=f'{os.path.splitext(path)[0]}_red_{tag_r}',
+                             read_cache=read_cache,
                              verbose=verbose, tag=f'{name} red')
 
     pairs, shift = pair_channels(loc_r, loc_g, tols=tols, verbose=verbose,
@@ -232,6 +234,255 @@ def pair_set_summary(ps):
             'resid_median': float(np.round(np.median(np.hypot(*r.T)), 3))}
 
 
+def pair_multichannel_files(files, roi, *, reference=None, verbose=True):
+    """Read, crop, localize, pair per file, then merge by moving channel.
+
+    ``reference`` defaults to the ROI's first channel. The returned list is
+    aligned with ``roi.channels`` and contains ``None`` at the reference slot.
+    """
+    if isinstance(files, (str, os.PathLike)):
+        files = [files]
+    else:
+        files = list(files)
+    if not files:
+        raise ValueError('files is empty')
+    if not isinstance(roi, MultichannelROI):
+        raise TypeError('roi must be a MultichannelROI')
+    if len(roi.channels) < 2:
+        raise ValueError('roi must define at least two channels')
+
+    channels = list(roi.channels)
+    reference = channels[0] if reference is None else reference
+    if reference not in channels:
+        raise ValueError(f'reference channel {reference!r} is not in roi.channels')
+    reference_index = channels.index(reference)
+    pair_tols = (6.0,)
+    min_pairs = 10
+    cap_per_file = 2000
+    max_shift_spread = 1.0
+    det_kw = {**CALIB_DET_KW, 'verbose': False}
+    loc_kw = dict(CALIB_LOC_KW)
+    sigma_by_name = {
+        'g': CALIB_K_SIGMA['green'],
+        'green': CALIB_K_SIGMA['green'],
+        'r': CALIB_K_SIGMA['red'],
+        'red': CALIB_K_SIGMA['red'],
+    }
+    detectors = [
+        LocalMaxDetector(
+            k_sigma=sigma_by_name.get(channel.lower(), 1.5),
+            **det_kw,
+        )
+        for channel in channels
+    ]
+    localizer = MLELocalizer(**loc_kw)
+    camera = EMCCD(**CALIB_CAM)
+    file_pairs = [[] for _ in channels]
+
+    for file_index, path in enumerate(files, start=1):
+        name = os.path.basename(os.fspath(path))
+        if verbose:
+            print(f'--- [{file_index}/{len(files)}] {name}')
+
+        raw = load_raw(path)
+        image = camera.process(raw)
+        if not isinstance(image, ImageStack):
+            image = ImageStack(
+                data=np.asarray(image.data),
+                pixel_size=getattr(image, 'pixel_size', None),
+                metadata=dict(getattr(image, 'metadata', {})),
+            )
+        multi = roi(image)
+        mean_stacks = [
+            mean_frame(multi.channel(channel))[0]
+            for channel in channels
+        ]
+        channel_locs = [
+            localizer.localize(stack, detector.detect(stack))
+            for stack, detector in zip(mean_stacks, detectors)
+        ]
+        if verbose:
+            counts = ', '.join(
+                f'{channel}={len(locs)}'
+                for channel, locs in zip(channels, channel_locs))
+            print(f'  localizations: {counts}')
+
+        pairs_for_file = pair_multichannels(
+            channel_locs,
+            channels=channels,
+            reference=reference,
+            tols=pair_tols,
+            min_pairs=min_pairs,
+            verbose=verbose,
+        )
+        for channel_index, pairs in enumerate(pairs_for_file):
+            if channel_index == reference_index:
+                continue
+            pairs.file[:] = name
+            if len(pairs):
+                file_pairs[channel_index].append(pairs)
+            if verbose:
+                print(f'  [{channels[channel_index]} -> {reference}] '
+                      f'{len(pairs)} pairs')
+
+    if not any(file_pairs[index] for index in range(len(channels))
+               if index != reference_index):
+        raise RuntimeError('No multichannel pairs found in any input file')
+
+    merged_pairs = [None] * len(channels)
+    for channel_index, channel in enumerate(channels):
+        if channel_index == reference_index:
+            continue
+        sets = file_pairs[channel_index]
+        shifts = np.asarray([pairs.shift for pairs in sets], dtype=float)
+        if len(shifts) > 1:
+            spread = np.ptp(shifts, axis=0)
+            if np.any(spread >= max_shift_spread):
+                warnings.warn(
+                    f'{channel} -> {reference}: per-file shift spread '
+                    f'({spread[0]:.2f}, {spread[1]:.2f}) px exceeds '
+                    f'{max_shift_spread:.1f} px; merging may combine '
+                    'inconsistent calibration sets',
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        merged_pairs[channel_index] = merge_pairs(
+            sets, cap_per_file=cap_per_file)
+        if verbose:
+            print(f'--- merged {channel} -> {reference}: '
+                  f'{len(merged_pairs[channel_index])} pairs '
+                  f'from {len(sets)} files')
+
+    return merged_pairs
+
+
+def fit_multichannel_pairs(multi_channel_pairs, roi, *, order='auto',
+                           method='poly', verbose=True):
+    """Fit channel-to-reference calibrations from aligned multichannel pairs.
+
+    The ``None`` entry in ``multi_channel_pairs`` identifies the reference
+    channel. The returned calibration list preserves that channel ordering.
+    """
+    if not isinstance(roi, MultichannelROI):
+        raise TypeError('roi must be a MultichannelROI')
+    if len(roi.channels) < 2:
+        raise ValueError('roi must define at least two channels')
+
+    pairs_by_channel = list(multi_channel_pairs)
+    if len(pairs_by_channel) != len(roi.channels):
+        raise ValueError('pairs length must match roi.channels')
+    reference_slots = [
+        index for index, pairs in enumerate(pairs_by_channel)
+        if pairs is None
+    ]
+    if len(reference_slots) != 1:
+        raise ValueError(
+            f'Expected one reference slot, got {len(reference_slots)}')
+
+    reference_index = reference_slots[0]
+    reference = roi.channels[reference_index]
+    reference_y, reference_x, _, _ = roi.windows[reference]
+    calibrations = [None] * len(roi.channels)
+
+    for channel_index, channel in enumerate(roi.channels):
+        if channel_index == reference_index:
+            continue
+        pairs = pairs_by_channel[channel_index]
+        if not isinstance(pairs, PairSet):
+            raise TypeError(
+                f'pairs for channel {channel!r} must be a PairSet')
+        if len(pairs) == 0:
+            raise ValueError(f'No pairs available for channel {channel!r}')
+
+        moving_y, moving_x, _, _ = roi.windows[channel]
+        calibration_roi = {
+            'type': 'MultichannelROI',
+            'reference': reference,
+            'moving': channel,
+            'channels': list(roi.channels),
+            'y': roi.y,
+            'x': roi.x,
+            'offsets': {
+                name: offset
+                for name, offset in zip(roi.channels, roi.offsets)
+            },
+            'windows': roi.windows,
+            'files': pairs.files(),
+        }
+        if verbose:
+            print(f'--- fitting {channel} -> {reference}')
+        calibrations[channel_index] = fit_transform(
+            pairs,
+            order=order,
+            method=method,
+            roi=calibration_roi,
+            coarse_offset=(moving_y - reference_y,
+                           moving_x - reference_x),
+            reference=reference,
+            moving=channel,
+            verbose=verbose,
+        )
+
+    return calibrations
+
+
+def multichannel_stack_from_calibration(stack, calibration_path, *,
+                                        show_roi=False):
+    """Crop an ``ImageStack`` with a saved bundle and attach its registrations.
+
+    Set ``show_roi=True`` to display the bundle's ROI on the input image before
+    cropping. Registration is stored in ``MultiImageStack.reg``; image pixels
+    are not warped.
+    """
+    if not isinstance(stack, ImageStack):
+        raise TypeError('stack must be an ImageStack')
+
+    bundle = MultiChannelCalibrationBundle.load(calibration_path)
+    roi_metadata = bundle.roi
+    if tuple(roi_metadata.get('channels', ())) != bundle.channels:
+        raise ValueError('calibration ROI channel order does not match bundle')
+    if roi_metadata.get('reference') != bundle.reference:
+        raise ValueError('calibration ROI reference does not match bundle')
+
+    roi = MultichannelROI(
+        y=roi_metadata['y'],
+        x=roi_metadata['x'],
+        offsets=[roi_metadata['offsets'][channel]
+                 for channel in bundle.channels],
+        channels=bundle.channels,
+    )
+    if show_roi:
+        roi.show_roi(stack)
+        import matplotlib.pyplot as plt
+        plt.show()
+
+    cropped = roi(stack)
+    metadata = dict(cropped.metadata)
+    metadata['multichannel_roi'] = {
+        **metadata.get('multichannel_roi', {}),
+        'reference': bundle.reference,
+    }
+    metadata.update({
+        'roi': bundle.roi,
+        'calibration_bundle': os.fspath(calibration_path),
+        'calibration_source_files': bundle.source_files,
+    })
+    return MultiImageStack(
+        data=cropped.data,
+        channels=list(bundle.channels),
+        reference=bundle.channels.index(bundle.reference),
+        reg={
+            channel: calibration
+            for channel, calibration in zip(
+                bundle.channels, bundle.calibrations)
+            if calibration is not None
+        },
+        offsets=cropped.offsets,
+        pixel_size=cropped.pixel_size,
+        metadata=metadata,
+    )
+
+
 def calibrate_dual_view(files, *, roi=None, split_x=None, row_range=None,
                         reference='g', moving='r', order='auto',
                         cap_per_file=2000, method='poly',
@@ -241,7 +492,8 @@ def calibrate_dual_view(files, *, roi=None, split_x=None, row_range=None,
                         pixel_size=None, frame_mode='mean',
                         frame_window=None, save_path=None,
                         seam=DEFAULT_SEAM, crops=None,
-                        min_consistent_shift=1.0, verbose=True):
+                        min_consistent_shift=1.0, read_cache=False,
+                        verbose=True):
     """依次处理多个标准样品文件, 合并配对后拟合一个统一变换。
 
     Parameters
@@ -258,6 +510,8 @@ def calibrate_dual_view(files, *, roi=None, split_x=None, row_range=None,
         ``coords.geometry_from_crops``), 否则分析窗口会比标定覆盖范围更靠外。
     save_path : str, optional
         给了就把标定存成 npz。
+    read_cache : bool
+        True 时读取已存在的定位缓存; 缺失或不兼容时直接报错。
 
     Returns
     -------
@@ -277,8 +531,11 @@ def calibrate_dual_view(files, *, roi=None, split_x=None, row_range=None,
                 cam_kw=cam_kw, k_sigma=k_sigma, det_kw=det_kw, loc_kw=loc_kw,
                 filt_kw=filt_kw, tols=tols, pixel_size=pixel_size,
                 frame_mode=frame_mode, frame_window=frame_window,
-                seam=seam, crops=crops, verbose=verbose)
+                seam=seam, crops=crops, read_cache=read_cache,
+                verbose=verbose)
         except Exception as exc:                     # 单文件失败不该毁掉整批
+            if read_cache:
+                raise
             print(f'  !! {os.path.basename(f)} 失败: {exc}')
             continue
         name = os.path.basename(f)

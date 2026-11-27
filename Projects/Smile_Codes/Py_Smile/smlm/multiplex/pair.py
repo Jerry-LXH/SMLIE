@@ -107,7 +107,7 @@ def match_pairs(mov, ref, tol, shift):
 
 
 def pair_channels(mov, ref, tols=DEFAULT_TOLS, init_shift=None,
-                  min_pairs=10, verbose=False, tag=''):
+                  min_pairs=8, verbose=False, tag=''):
     """由粗到细地配对两个通道的定位点。
 
     Parameters
@@ -128,7 +128,9 @@ def pair_channels(mov, ref, tols=DEFAULT_TOLS, init_shift=None,
     mov = xy_of(mov)
     ref = xy_of(ref)
     if len(mov) == 0 or len(ref) == 0:
-        return PairSet(np.zeros((0, 2)), np.zeros((0, 2))), np.zeros(2)
+        shift = np.zeros(2)
+        return PairSet(np.zeros((0, 2)), np.zeros((0, 2)),
+                       shift=shift), shift
 
     if init_shift is None:
         d, j = cKDTree(ref).query(mov, k=1)
@@ -148,8 +150,59 @@ def pair_channels(mov, ref, tols=DEFAULT_TOLS, init_shift=None,
             print(f'  [{tag}] tol={tol:5.1f} px -> {len(i_mov):5d} pairs, '
                   f'shift=({shift[0]:+.2f}, {shift[1]:+.2f}) px')
     if len(i_mov) < min_pairs:
-        return PairSet(np.zeros((0, 2)), np.zeros((0, 2))), shift
+        return PairSet(np.zeros((0, 2)), np.zeros((0, 2)),
+                       shift=shift), shift
     return PairSet(mov[i_mov], ref[i_ref], shift=shift), shift
+
+
+def pair_multichannels(locs, channels=None, reference=None,
+                       tols=DEFAULT_TOLS, min_pairs=10, verbose=False):
+    """Pair every non-reference channel to one shared reference channel.
+
+    ``locs`` and ``channels`` use the same order. ``reference`` may be a channel
+    label when ``channels`` is provided, or an integer index. The returned list
+    is aligned with the channel order; its reference entry is ``None``.
+    """
+    locs = list(locs)
+    if not locs:
+        raise ValueError('locs must contain at least one channel')
+
+    if channels is None:
+        channel_names = list(range(len(locs)))
+    else:
+        channel_names = list(channels)
+        if len(channel_names) != len(locs):
+            raise ValueError('channels length must match locs length')
+        if len(set(channel_names)) != len(channel_names):
+            raise ValueError('channels must contain unique labels')
+
+    if reference is None:
+        reference_index = 0
+    elif isinstance(reference, (int, np.integer)):
+        reference_index = int(reference)
+        if not 0 <= reference_index < len(locs):
+            raise ValueError('reference index is out of range')
+    else:
+        try:
+            reference_index = channel_names.index(reference)
+        except ValueError as exc:
+            raise ValueError(f'unknown reference channel: {reference!r}') from exc
+
+    pairs = [None] * len(locs)
+    reference_locs = locs[reference_index]
+    reference_name = channel_names[reference_index]
+    for i, moving_locs in enumerate(locs):
+        if i == reference_index:
+            continue
+        pairs[i], _ = pair_channels(
+            moving_locs,
+            reference_locs,
+            tols=tols,
+            min_pairs=min_pairs,
+            verbose=verbose,
+            tag=f'{channel_names[i]} -> {reference_name}',
+        )
+    return pairs
 
 
 # ---------------------------------------------------------------------------

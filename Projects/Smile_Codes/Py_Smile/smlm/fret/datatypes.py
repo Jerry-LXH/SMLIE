@@ -25,10 +25,11 @@ class StepEvent:
     IA_pre: float
     IA_post: float
     ID_pre: float
-    ID_post: float
+    ID_post: float                  # 供体亮态电平 (抗闪烁: 长窗内亮帧的中位数)
     dIA: float                      # 红降(含 α·ΔI_D 的反向贡献)
-    dID: float                      # 绿升(短窗)
-    dID_long: float                 # 绿升(长窗, 持续性)
+    dID: float                      # 绿升(抗闪烁口径, 用亮态电平)
+    dID_long: float                 # 绿升(长窗**纯中位数**口径, 仅供诊断: 闪烁会让它偏低)
+    n_on_d: int = -1                # 长窗内处于亮态的帧数
     sig_a: float = np.nan           # 受体通道白噪声 σ
     sig_d: float = np.nan           # 供体通道白噪声 σ
     score: float = np.nan

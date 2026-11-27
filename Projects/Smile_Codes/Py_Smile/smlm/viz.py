@@ -897,3 +897,109 @@ def check_trace(trace, emitter=None, ex_time=1.0, mle_brightness=None,
 
     plt.show()
     return fig
+
+
+def _emitter_movie_kwargs(emitter, traces, locs, index, extra):
+    """组装单个分子的 ``save_movie`` 关键字: trace / overlay + 用户额外参数。"""
+    kw = {}
+    if traces is not None:
+        kw['trace'] = traces[index]
+    if locs is not None:
+        li = getattr(emitter, 'loc_idx', None)
+        kw['overlay'] = locs[li] if li is not None else locs
+    kw.update(extra)                               # 用户显式给的优先
+    return kw
+
+
+def preview_emitters(stack, traces, emitters, locs=None, indices=None, *,
+                     half=12, frames=None, stride=1, center='median',
+                     width=420, ncols=2, **kwargs):
+    """**一次预览多个**单分子窗口, 每个都和 ``save_movie`` 同款渲染。
+
+    相当于对 ``indices`` 里的每个序号调用 :func:`smlm.io.preview_movie`, 再拼成
+    一个可滚动的图墙; ``traces`` / ``locs`` 与 ``emitters`` 同索引时自动取对应
+    的 trace 与定位点, 不用手写循环。
+
+    Parameters
+    ----------
+    stack : ImageStack
+        全 FOV 影片 (通常是漂移校正后的 ``corr_image``)。
+    traces : sequence | None
+        与 ``emitters`` 同索引的 trace 序列; None = 不画右侧曲线。
+    emitters : sequence
+        Emitter 列表, ``indices`` 是它的下标。
+    locs : Localizations | None
+        用于画 ``×`` 的定位点; None = 不叠加。有 ``emitter.loc_idx`` 时只取该分子的点。
+    indices : None | int | slice | 序列 | 布尔掩码
+        要预览哪些 emitter, 语义同 :func:`_as_index_list`; None = 全部。
+    half, frames, stride, center
+        窗口参数, 透传 :func:`emitter_roi`。
+    width : int
+        每个播放器的显示宽度 (像素)。
+    ncols : int
+        每行放几个; 只影响外框宽度, 不会裁剪视频。
+    **kwargs
+        其余透传 :func:`smlm.io.preview_movie` —— ``exposure_time`` / ``speed`` /
+        ``clim`` ...
+
+    Returns
+    -------
+    IPython.display.HTML
+        图墙; notebook 里直接显示。
+    """
+    from IPython.display import HTML
+
+    from .io import preview_movie
+
+    idxs = _as_index_list(indices, len(emitters))
+    extra = dict(kwargs)
+    extra.setdefault('width', int(width))
+
+    cells = []
+    for i in idxs:
+        roi = emitter_roi(stack, emitters[i], half=half, frames=frames,
+                          stride=stride, center=center)
+        kw = _emitter_movie_kwargs(emitters[i], traces, locs, i, extra)
+        video = preview_movie(roi, **kw)._repr_html_()
+        cells.append(
+            '<div style="display:inline-block;margin:0 8px 8px 0;'
+            'vertical-align:top">'
+            f'<div style="font:12px/1.4 monospace;color:#666">#{i}</div>'
+            f'{video}</div>')
+
+    box = f'<div style="max-width:{ncols * (int(width) + 16)}px">'
+    return HTML(box + ''.join(cells) + '</div>')
+
+
+def save_emitters(stack, traces, emitters, locs=None, indices=None, *,
+                  out_dir='.', pattern='em{idx:03d}.mp4', tag=None,
+                  half=12, frames=None, stride=1, center='median', **kwargs):
+    """把多个单分子窗口**批量**存成 mp4, 返回写出的路径列表。
+
+    与 :func:`preview_emitters` 用同一套渲染, 只是落盘; 文件名由 ``pattern`` 决定,
+    可用 ``{tag}`` 和 ``{idx}`` 两个占位符 (``tag`` 用 ``tag=`` 传入)。
+
+    Examples
+    --------
+    >>> save_emitters(corr_image, traces, emitters, corr_locs, indices=KEEP,
+    ...               out_dir=os.path.dirname(src), pattern='{tag}_em{idx:03d}.mp4',
+    ...               tag='sif001', exposure_time=0.05, speed=5)
+    """
+    import os
+
+    from .io import save_movie
+
+    idxs = _as_index_list(indices, len(emitters))
+    os.makedirs(out_dir, exist_ok=True)
+    extra = dict(kwargs)
+
+    paths = []
+    for i in idxs:
+        roi = emitter_roi(stack, emitters[i], half=half, frames=frames,
+                          stride=stride, center=center)
+        name = pattern.format(tag=tag if tag is not None else '', idx=i)
+        path = os.path.join(out_dir, name)
+        save_movie(roi, path, **_emitter_movie_kwargs(emitters[i], traces, locs,
+                                                      i, extra))
+        paths.append(path)
+    return paths

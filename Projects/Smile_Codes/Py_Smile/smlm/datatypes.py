@@ -36,12 +36,6 @@ class ImageStack:
 class MultiImageStack:
     """多通道图像栈:各通道已裁到**同一物理窗口**,共用参考通道坐标系。
 
-    为什么不直接给 ImageStack 加一个通道维:
-        ``localize``(``extract_rois`` 按 ``data[f, ...]`` 取帧)、``imgprocess``
-        (Crop / Pipeline / DriftCorrector 全按 ``(T,H,W)``)、``viz`` 都硬编码了
-        "(T,H,W), 第 0 维是帧"。加一维会让 ``n_frames`` 静默变成通道数, 属于
-        最坏的一类破坏。所以单独一个类。
-
     与单通道流程的衔接:
         ``channel(ch)`` 返回 ``data[i]`` 的**视图**包成的 ImageStack,
         因此 detect / localize / Crop / DriftCorrector / viz 全部可直接复用,
@@ -185,6 +179,49 @@ class MultiImageStack:
             offsets=self.offsets if offsets is None else offsets,
             pixel_size=self.pixel_size,
             metadata=dict(self.metadata) if metadata is None else dict(metadata))
+
+    def crop(self, y, x) -> 'MultiImageStack':
+        """Crop the same local ``(y, x)`` window from every channel.
+
+        The detector-coordinate origin for each channel is advanced by the
+        crop start, while channel registrations and calibration metadata stay
+        unchanged.
+        """
+        def bounds(value, name, size):
+            try:
+                pair = tuple(value)
+            except TypeError:
+                raise ValueError(f'{name} must be a (start, stop) pair') from None
+            if len(pair) != 2:
+                raise ValueError(f'{name} must be a (start, stop) pair')
+            start, stop = pair
+            if not isinstance(start, (int, np.integer)) or not isinstance(
+                    stop, (int, np.integer)):
+                raise TypeError(f'{name} bounds must be integers')
+            start, stop = int(start), int(stop)
+            if start < 0 or stop <= start or stop > size:
+                raise ValueError(
+                    f'{name}={start, stop} is outside local size {size}')
+            return start, stop
+
+        y0, y1 = bounds(y, 'y', self.data.shape[2])
+        x0, x1 = bounds(x, 'x', self.data.shape[3])
+        offsets = (np.zeros((self.n_channels, 2), dtype=int)
+                   if self.offsets is None else self.offsets.copy())
+        offsets += np.array([y0, x0], dtype=int)
+        metadata = dict(self.metadata)
+        crops = list(metadata.get('analysis_crops', []))
+        crops.append({'y': [y0, y1], 'x': [x0, x1]})
+        metadata['analysis_crops'] = crops
+        return MultiImageStack(
+            data=self.data[:, :, y0:y1, x0:x1],
+            channels=list(self.channels),
+            reference=self.reference,
+            reg=dict(self.reg),
+            offsets=offsets,
+            pixel_size=self.pixel_size,
+            metadata=metadata,
+        )
 
     def __repr__(self):
         c, t, h, w = self.data.shape
@@ -351,42 +388,57 @@ class EmitterStats:
     bg_mean: np.ndarray
 
 
-@dataclass
-class Trace:
-    emitter_id: int
-    frames: np.ndarray            # 连续帧轴 (稠密, 含 OFF 帧)
-    intensity: np.ndarray         # 分析主对象: 扣背景后信号 (或 raw)
-    raw: np.ndarray               # 原始积分强度 (raw_series)
-    bg: np.ndarray | None = None  # 每像素背景 (bg_series)
-    snr: np.ndarray | None = None # 逐帧空间 SNR (snr_series)
-    x: float = 0.0                # 提取中心 (像素坐标)
-    y: float = 0.0
-    meta: dict = field(default_factory=dict)  # edge / bg_edge / method / n_bg_pixels ...
+def _brief_trace_value(value):
+    arr = np.asarray(value)
+    return f'array{arr.shape}' if arr.ndim else repr(value)
 
-    def __len__(self):
-        return self.frames.size
 
-@dataclass
-class StateInfo:
-    label: int
-    mean_intensity: float
-    std_intensity: float
-    occupancy: float                     # 占空比 (相对 active 段)
+class Trace(dict):
+    """一条 trace: 字段名 -> 逐帧数组 (T,) 或标量。list 下标 = emitter 序号。
 
-@dataclass
-class StateResult:
-    emitter_id: int
-    trace: np.ndarray                    # 被分析的信号 (通常 intensity)
-    sequence: np.ndarray                 # 逐帧状态标签, 0 = OFF/背景
-    transitions: np.ndarray              # (n,2): [frame_index, new_state]
-    n_states: int
-    state_info: list[StateInfo]
-    fit_trace: np.ndarray                # 阶梯拟合
-    background: float
-    trace_bgsub: np.ndarray
-    fit_trace_bgsub: np.ndarray
-    bleach_frame: int | None             # 索引 (非 frame 值); None = 未漂白
-    start_frame: int
-    lifetime: int | None
-    method: str
-    meta: dict = field(default_factory=dict)
+    字段是**开放**的: 取 trace 的各阶段 (见
+    :class:`smlm.trace.fill.TraceFillPipeline`) 只写自己声明的键, 因此加一个新的量
+    不需要修改这个类。完整清单见 :data:`smlm.trace.fill.TRACE_FIELDS`。
+
+    骨架只含 ``emitter_id / frames / x / y``; ``raw / bg / intensity / snr`` 以及
+    ``sigma / radius`` 等由后续阶段填写。缺字段时 ``t['raw']`` 抛 ``KeyError``
+    (响亮), ``t.get('raw')`` 返回 ``None``。
+
+    兼容说明: ``t.intensity`` 与 ``t['intensity']`` 等价, ``t.meta`` 返回自身,
+    所以 ``t.meta.get('radius', 5)`` 仍然工作。``len(t)`` 现在是**字段数**
+    (旧 dataclass 版本返回帧数), 帧数请用 ``t.n_frames``。
+    """
+
+    __slots__ = ()
+
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError:
+            raise AttributeError(f'{type(self).__name__!s} has no field {name!r}; '
+                                 f'available: {sorted(self)}') from None
+
+    def __setattr__(self, name, value):
+        self[name] = value
+
+    def __delattr__(self, name):
+        try:
+            del self[name]
+        except KeyError:
+            raise AttributeError(name) from None
+
+    @property
+    def meta(self):
+        """所有字段的别名, 供 ``trace.meta.get(...)`` 旧写法使用。"""
+        return self
+
+    @property
+    def n_frames(self):
+        return int(np.size(self['frames']))
+
+    def copy(self):
+        return Trace(self)
+
+    def __repr__(self):
+        body = ', '.join(f'{k}={_brief_trace_value(v)}' for k, v in self.items())
+        return f'Trace({body})'

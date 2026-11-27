@@ -10,9 +10,10 @@
 
 * ``ΔI_A`` 直接用测到的红降 ``I_A^pre − I_A^post``, **串色不扣** —— 所以得到的是
   ``γ − α``; 要把串色扣掉就 ``add_alpha=True`` (等价于 ``+ α``)。
-* 两个量都只在**漂白台阶附近**读数 (``local_step``, ±``win`` 帧), 不用远端平台,
-  也不用整条 trace 的平均: 远端会被别的闪烁/漂白污染, 全长平均会把背景漂移算成
-  信号。
+* 两个量都只在**漂白台阶附近**读数 (``local_step``, 受体侧 ±``win`` 帧), 不用远端
+  平台, 也不用整条 trace 的平均: 远端会被别的闪烁/漂白污染, 全长平均会把背景漂移
+  算成信号。供体一侧在 ``4·win`` 的长窗里取**亮帧**中位数 (抗闪烁), 否则一个
+  恰好灭着的 4 帧窗口会把 ``ΔI_D`` 做小、把 γ 抬高。
 
 三个估计量里推荐 ``γ_med``: 回归斜率(ols/rma)在两边都带噪声时偏差很大 ——
 ΔI_D 被低估的点会把斜率压低。
@@ -116,11 +117,15 @@ class FretCalibration:
 # ---------------------------------------------------------------------------
 #  台阶附近的局部读数
 # ---------------------------------------------------------------------------
-def local_step(ya, yd, j, lag, win=4):
+def local_step(ya, yd, j, lag, win=4, sd=None):
     """在 **bleach 台阶附近**直接量 ΔI_A / ΔI_D。
 
     只看紧贴台阶的那几帧, 不用远端平台, 也不用整条 trace 的平均 —— 远端平台
     会被前后别的闪烁/漂白污染, 整条 trace 的平均更是把背景漂移算进信号。
+
+    供体一侧用**抗闪烁**口径 (:func:`~smlm.fret.events.post_level`): 在 ``4·win``
+    帧的长窗里挑出 ``I_D^pre + 3σ_D`` 以上的亮帧取中位数。供体去淬灭后经常闪,
+    固定取 4 帧的中位数会随机偏低, 直接把 γ 的分母做小。
 
     Parameters
     ----------
@@ -132,13 +137,18 @@ def local_step(ya, yd, j, lag, win=4):
         供体去淬灭的滞后帧。
     win : int
         半窗长(帧)。受体取 ``[j-win, j)`` vs ``[j, j+win)``;
-        供体取 ``[j-win, j)`` (去淬灭前的基线) vs ``[j+lag, j+lag+win)``。
+        供体取 ``[j-win, j)`` 作基线, 其后 ``4·win`` 帧作亮态窗。
+    sd : float, optional
+        供体通道噪声 σ; 不给就用 ``robust_noise(yd)`` 现估。
 
     Returns
     -------
     dict or None
-        ``{IA_pre, IA_post, ID_pre, ID_post, dIA, dID}``; 窗口越界或全 nan 返回 None。
+        ``{IA_pre, IA_post, ID_pre, ID_post, dIA, dID, n_on}``;
+        窗口越界或全 nan 返回 None。
     """
+    from .events import post_level
+
     ya = np.asarray(ya, float)
     yd = np.asarray(yd, float)
     n = min(ya.size, yd.size)
@@ -146,7 +156,8 @@ def local_step(ya, yd, j, lag, win=4):
     lag = int(max(0, lag))
     win = int(max(1, win))
     jd = j + lag
-    if j - win < 0 or j + win > n or jd + win > n:
+    span = int(4 * win)
+    if j - win < 0 or j + win > n or jd + min(win, span) > n:
         return None
 
     def _m(y, a, b):
@@ -157,11 +168,17 @@ def local_step(ya, yd, j, lag, win=4):
     IA_pre = _m(ya, j - win, j)
     IA_post = _m(ya, j, j + win)
     ID_pre = _m(yd, j - win, j)
-    ID_post = _m(yd, jd, jd + win)
+
+    hi = min(n, jd + span)
+    s_d = max(float(robust_noise(yd)) if sd is None else float(sd), 1e-9)
+    ID_post, n_on = post_level(yd, jd, hi, ID_pre + 3.0 * s_d,
+                               max(2, win // 2))
+    if not np.isfinite(ID_post):        # 没有可信亮态 -> 退回纯中位数
+        ID_post, n_on = _m(yd, jd, hi), 0
     if not np.all(np.isfinite([IA_pre, IA_post, ID_pre, ID_post])):
         return None
     return dict(IA_pre=IA_pre, IA_post=IA_post, ID_pre=ID_pre, ID_post=ID_post,
-                dIA=IA_pre - IA_post, dID=ID_post - ID_pre)
+                dIA=IA_pre - IA_post, dID=ID_post - ID_pre, n_on=int(n_on))
 
 
 def gamma_points(events, traces_a=None, traces_d=None, *, win=4,
@@ -179,7 +196,8 @@ def gamma_points(events, traces_a=None, traces_d=None, *, win=4,
         if use_tr:
             loc = local_step(traces_a[int(e.emitter_id)].intensity,
                              traces_d[int(e.emitter_id)].intensity,
-                             e.frame, e.lag, win)
+                             e.frame, e.lag, win,
+                             sd=sd if sd > 0 else None)
             if loc is None:
                 continue
             da, dd = loc['dIA'], loc['dID']
