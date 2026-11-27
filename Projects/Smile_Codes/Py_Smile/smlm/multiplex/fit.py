@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from .transform import DualViewCalibration
-from .pair import PairSet
+from .pair import PairSet  # noqa: F401  仅用于 docstring 里的类型说明
 
 # 每参数建议的最少配对数, 低于它就自动降阶 (10 参数至少要 20 对才不至于过拟合)
 MIN_PAIRS_PER_PARAM = 2.0
@@ -289,18 +289,3 @@ def fit_transform(pairs, *, order='auto', method='poly', max_order=3,
         coarse_offset=tuple(coarse_offset),
         reference=str(reference), moving=str(moving))
 
-
-def residual_report(calib, pairs, method='poly'):
-    """给定标定和配对点, 返回总体 + 分文件的残差统计。"""
-    R = np.asarray(pairs.mov, float)
-    G = np.asarray(pairs.ref, float)
-    pred = calib.transform(R, method=method)
-    out = {'all': _summary(pred, G)}
-    if len(pairs) and len(pairs.files()) > 1:
-        pf = {}
-        for f in pairs.files():
-            m = pairs.file == f
-            if m.sum() >= 3:
-                pf[str(f)] = _summary(pred[m], G[m])
-        out['per_file'] = pf
-    return out

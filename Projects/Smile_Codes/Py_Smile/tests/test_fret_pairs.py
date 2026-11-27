@@ -430,13 +430,3 @@ def test_pair_gallery_wraps_into_rows():
     n_titles = sum(1 for ax in fig.axes if ax.get_title())
     assert n_titles == 5
     assert fig.axes[0].get_subplotspec().get_gridspec().nrows == 3   # ceil(5/2)
-
-
-def test_render_trace_png_still_works_with_and_without_event():
-    from smlm.fret import viz
-
-    pa, pd = _pair()
-    rec, _ = _run(pa, pd, [_donor()])
-    for ev in (None, rec.event):
-        png = viz.render_trace_png(pa, pd, ev, ex_time=0.1)
-        assert png[:4] == b'\x89PNG'

@@ -14,7 +14,6 @@ from matplotlib.patches import Rectangle
 
 from ..datatypes import MultiImageStack
 from .drift import drift_side_needs
-from .fit import design, poly_terms
 
 
 def _multichannel_mean_montage(multi, frame=None):
@@ -191,38 +190,6 @@ def plot_overview(calib, pairs=None, figsize=(14, 4.4)):
     plot_residual_map(calib, pairs, ax=fig.add_subplot(gs[0, 2]))
     fig.suptitle(f'{calib.moving} -> {calib.reference}   n={len(pairs)}   '
                  f'coarse={tuple(calib.coarse_offset)}', fontsize=10)
-    return fig
-
-
-def plot_channel_check(data_ref, data_mov, calib=None, frame=0,
-                       zoom=45, figsize=(11, 5.2)):
-    """两通道平均图 + 点叠加, 看是否真的重合。
-
-    ``data_*`` 是 (T,H,W) 或 (H,W)。给了 calib 就把 mov 的点映射到 ref 再画。
-    """
-    img = np.asarray(data_ref, float)
-    img = img.mean(axis=0) if img.ndim == 3 else img
-    im_mov = np.asarray(data_mov, float)
-    im_mov = im_mov.mean(axis=0) if im_mov.ndim == 3 else im_mov
-
-    vmin, vmax = np.percentile(img, (0.2, 99.8))
-    h, w = img.shape
-    cy, cx = h // 2, w // 2          # 放大看视场中央
-
-    fig, axs = plt.subplots(1, 2, figsize=figsize)
-    for ax, second, title in [(axs[0], None, 'reference channel'),
-                              (axs[1], im_mov, 'reference + moving (mapped)')]:
-        ax.imshow(img, cmap='gray', vmin=vmin, vmax=vmax, origin='upper')
-        if second is not None:
-            v2 = np.percentile(im_mov, (0.2, 99.8))
-            ax.imshow(im_mov, cmap='magma', vmin=v2[0], vmax=v2[1],
-                      origin='upper', alpha=0.45)
-        ax.set_xlim(cx - zoom, cx + zoom)
-        ax.set_ylim(cy + zoom, cy - zoom)
-        ax.set_title(title, fontsize=9)
-        ax.set_xticks([])
-        ax.set_yticks([])
-    fig.tight_layout()
     return fig
 
 
@@ -440,98 +407,6 @@ def plot_drift_fov(multi, drift, *, channels=None, frame=0, figsize=None,
 # ---------------------------------------------------------------------------
 #  取框预览: 让人眼决定两个通道切到哪里
 # ---------------------------------------------------------------------------
-def plot_cut_windows(frame, crops=None, *, split_x=None, seam_hint=None,
-                     reference='g', moving='r', figsize=(14, 6.2),
-                     profile=True):
-    """在双视角平均图上画出两通道的**取框**, 供人眼确认后再切。
-
-    为什么必须看一眼: 探测器上两条半幅交界处有一条鬼影/串扰亮带, 落在里面的
-    "分子"可能是另一个通道的尾巴。但这条带有多宽、从哪一列开始, 跟光路和焦面
-    都有关系 —— 不能拍一个常数。所以取框是人的判断, 本函数只负责把判断画出来。
-
-    Parameters
-    ----------
-    frame : (T,H,W) 或 (H,W)
-        整幅双视角图(未切通道)。
-    crops : dict or None
-        ``{'g': dict(y=(y0, y1), x=(x0, x1)), 'r': {...}}``。None 时只画
-        ``split_x`` 分界线与鬼影带提示, 不画框(先看图再定框)。
-    split_x : int
-        分界线列号; None 时取图宽的一半。
-    seam_hint : int
-        鬼影带的**提示**宽度(px), 用灰色带标出 split_x ± seam_hint。
-
-    Returns
-    -------
-    matplotlib Figure
-    """
-    img = np.asarray(getattr(frame, 'data', frame), float)
-    img = img.mean(axis=0) if img.ndim == 3 else img
-    h, w = img.shape
-    if split_x is None:
-        split_x = w // 2
-
-    ncol = 2 if profile else 1
-    fig, axs = plt.subplots(1, ncol, figsize=figsize,
-                            gridspec_kw={'width_ratios': [1.25, 1]} if profile else None)
-    ax = np.atleast_1d(axs)[0]
-
-    vmin, vmax = np.percentile(img, (0.2, 99.8))
-    ax.imshow(img, cmap='gray', vmin=vmin, vmax=vmax, origin='upper')
-
-    # 分界线 + 鬼影带
-    ax.axvline(split_x - 0.5, color='yellow', ls='--', lw=1.1)
-    if seam_hint:
-        for x0 in (split_x - seam_hint, split_x + seam_hint):
-            ax.axvline(x0 - 0.5, color='orange', ls=':', lw=1.0)
-        ax.axvspan(split_x - seam_hint, split_x + seam_hint,
-                   color='orange', alpha=0.16, lw=0)
-        # 标在图底部, 免得和两个框的标签重叠
-        ax.text(split_x, h * 0.985, f'ghost band\n±{seam_hint} px',
-                color='orange', fontsize=7, ha='center', va='bottom')
-
-    # 两通道取框
-    colors = {reference: 'lime', moving: 'red'}
-    if crops:
-        for ch in (reference, moving):
-            if ch not in crops:
-                continue
-            y0, y1 = (int(v) for v in crops[ch]['y'])
-            x0, x1 = (int(v) for v in crops[ch]['x'])
-            ax.add_patch(plt.Rectangle((x0 - 0.5, y0 - 0.5), x1 - x0, y1 - y0,
-                                       fill=False, ec=colors[ch], lw=1.6))
-            ax.text(x0 + 2, y0 + 10, f'{ch}  x{x0}..{x1}  y{y0}..{y1}\n'
-                                      f'{x1 - x0} x {y1 - y0} px',
-                    color=colors[ch], fontsize=7, va='top',
-                    bbox=dict(fc='black', alpha=0.45, lw=0, pad=2))
-            # 被让出去的部分涂暗, 一眼看出丢了什么
-            ax.axvspan(x0, x1, ymin=1 - (y0 + (h - y1)) / h, ymax=1 - y0 / h,
-                       color=colors[ch], alpha=0.07, lw=0)
-    ax.set_title('dual-view frame — confirm the two cut boxes', fontsize=9)
-    ax.set_xlabel('detector column')
-    ax.set_ylabel('detector row')
-
-    if profile:
-        axp = np.atleast_1d(axs)[1]
-        prof = img.mean(axis=0)
-        axp.plot(np.arange(w), prof, lw=0.8, color='0.35')
-        axp.axvline(split_x - 0.5, color='yellow', ls='--', lw=1.1)
-        if seam_hint:
-            axp.axvspan(split_x - seam_hint, split_x + seam_hint,
-                        color='orange', alpha=0.16, lw=0)
-        if crops:
-            for ch in (reference, moving):
-                if ch in crops:
-                    x0, x1 = (int(v) for v in crops[ch]['x'])
-                    axp.axvspan(x0, x1, color=colors[ch], alpha=0.08, lw=0)
-        axp.set_xlabel('detector column')
-        axp.set_ylabel('mean photons / px')
-        axp.set_title('column profile — look for the bright ghost band', fontsize=9)
-        axp.grid(alpha=0.3)
-    fig.tight_layout()
-    return fig
-
-
 # ---------------------------------------------------------------------------
 #  多通道 trace: 每个子图叠加所选通道, 颜色 = 通道, 亮度 = 字段
 # ---------------------------------------------------------------------------

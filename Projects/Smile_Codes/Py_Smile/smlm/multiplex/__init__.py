@@ -10,21 +10,22 @@
 
 典型流程
 --------
-标定(离体标准样品)::
+标定(离体标准样品), 见 ``smTest_dual_calibration.ipynb``::
 
-    from smlm.multiplex import calibrate_dual_view, DualViewROI
-    calib, rep = calibrate_dual_view(['std2.sif', 'std.sif'],
-                                     roi=DualViewROI(split_x=256,
-                                                     row_range=(0, 512)))
-    calib.save('dualcal_v2.npz')
+    from smlm.multiplex import (MultichannelROI, pair_multichannel_files,
+                                fit_multichannel_pairs,
+                                MultiChannelCalibrationBundle)
+    roi = MultichannelROI(y=(0, 512), x=(10, 246),
+                          offsets=((0, 0), (0, 256)), channels=('g', 'r'))
+    pairs = pair_multichannel_files(['std2.sif', 'std.sif'], roi, reference='g')
+    calibs = fit_multichannel_pairs(pairs, roi)
+    MultiChannelCalibrationBundle.from_fit(calibs, roi, files).save('cal.npz')
 
-分析(实验数据)::
+分析(实验数据), 见 ``smTest_dual.ipynb``::
 
-    from smlm.multiplex import load_multi, DualViewCalibration
-    ms = load_multi('sample.sif', margin=12)     # 两通道同一物理窗口
-    calib = DualViewCalibration.load('dualcal_v2.npz')
-    xy_ref = calib.transform(xy_red)             # red local -> green local
-    locs_ref = calib.apply_locs(locs_r)          # 对 Localizations 一步到位
+    from smlm.multiplex import (MultichannelROI, estimate_drift_multi,
+                                correct_multi, analyze_multichannel_emitters,
+                                extract_multichannel_traces, map_channel_xy)
 """
 from __future__ import annotations
 
@@ -32,22 +33,15 @@ from .transform import DualViewCalibration, NPZ_VERSION
 from .bundle import MultiChannelCalibrationBundle
 from .pair import (PairSet, match_pairs, pair_channels, pair_multichannels,
                    merge_pairs, DEFAULT_TOLS)
-from .fit import (poly_terms, n_params, design, fit_transform, residual_report,
+from .fit import (poly_terms, n_params, design, fit_transform,
                   cv_select_order, MIN_PAIRS_PER_PARAM)
-from .channels import (DualViewROI, split_dual_view, cut_pair, build_multi,
-                       cut_channels, multi_from_crops,
-                       refine_coarse_offset, check_drift_margin, seam_windows,
-                       split_from_crops, windows_from_crops,
-                       mirror_crop, crops_from_ref, analysis_crops,
-                       DEFAULT_SPLIT_X, DEFAULT_ROW_RANGE, DEFAULT_SEAM,
-                       SEAM_HINT)
 from .roi import MultichannelROI
-from .pipeline import (calibrate_dual_view, calib_one_file, load_multi,
-                       localize_channel, mean_frame,
+from .channels import (windows_from_crops, multi_from_crops, mirror_crop,
+                       analysis_crops, DEFAULT_SPLIT_X)
+from .pipeline import (localize_channel, mean_frame,
                        pair_multichannel_files, fit_multichannel_pairs,
                        multichannel_stack_from_calibration)
-from .coords import (DualViewGeometry, geometry_from_multi, geometry_from_crops,
-                     calib_windows_from_roi, window_from_range, map_channel_xy)
+from .coords import DualViewGeometry, calib_windows_from_calibs, map_channel_xy
 from .drift import (CropWindow, correct_multi, drift_crop_window,
                     drift_requirements, estimate_drift_multi,
                     merge_registered)
@@ -56,8 +50,8 @@ from .emitters import (analyze_multichannel_emitters, channel_locs,
 from .traces import extract_multichannel_traces
 from . import viz
 from .viz import (plot_displacement_field, plot_residual_hist,
-                  plot_residual_map, plot_overview, plot_channel_check,
-                  plot_cut_windows, plot_multichannel_localizations,
+                  plot_residual_map, plot_overview,
+                  plot_multichannel_localizations, plot_multichannel_roi,
                   plot_multichannel_crop, plot_multi_drift, plot_drift_fov,
                   plot_channel_traces)
 
@@ -69,23 +63,17 @@ __all__ = [
     'PairSet', 'match_pairs', 'pair_channels', 'pair_multichannels',
     'merge_pairs', 'DEFAULT_TOLS',
     # 拟合
-    'poly_terms', 'n_params', 'design', 'fit_transform', 'residual_report',
+    'poly_terms', 'n_params', 'design', 'fit_transform',
     'cv_select_order', 'MIN_PAIRS_PER_PARAM',
-    # 切通道 / 余量
-    'DualViewROI', 'split_dual_view', 'cut_pair', 'build_multi',
-    'MultichannelROI',
-    'cut_channels', 'multi_from_crops',
-    'refine_coarse_offset', 'check_drift_margin', 'seam_windows',
-    'split_from_crops', 'windows_from_crops',
-    'mirror_crop', 'crops_from_ref', 'analysis_crops',
-    'DEFAULT_SPLIT_X', 'DEFAULT_ROW_RANGE', 'DEFAULT_SEAM', 'SEAM_HINT',
+    # 取框
+    'MultichannelROI', 'windows_from_crops', 'multi_from_crops', 'mirror_crop',
+    'analysis_crops', 'DEFAULT_SPLIT_X',
     # 流程
-    'calibrate_dual_view', 'calib_one_file', 'load_multi', 'localize_channel',
-    'mean_frame', 'pair_multichannel_files', 'fit_multichannel_pairs',
+    'localize_channel', 'mean_frame',
+    'pair_multichannel_files', 'fit_multichannel_pairs',
     'multichannel_stack_from_calibration',
     # 坐标层
-    'DualViewGeometry', 'geometry_from_multi', 'geometry_from_crops',
-    'calib_windows_from_roi', 'window_from_range', 'map_channel_xy',
+    'DualViewGeometry', 'calib_windows_from_calibs', 'map_channel_xy',
     # 多通道漂移
     'CropWindow', 'merge_registered', 'estimate_drift_multi', 'correct_multi',
     'drift_crop_window', 'drift_requirements',
@@ -94,7 +82,7 @@ __all__ = [
     'emitter_centers_xy', 'extract_multichannel_traces',
     # 可视化
     'viz', 'plot_displacement_field', 'plot_residual_hist', 'plot_residual_map',
-    'plot_overview', 'plot_channel_check', 'plot_cut_windows',
-    'plot_multichannel_localizations', 'plot_multichannel_crop',
+    'plot_overview', 'plot_multichannel_localizations',
+    'plot_multichannel_roi', 'plot_multichannel_crop',
     'plot_multi_drift', 'plot_drift_fov', 'plot_channel_traces',
 ]

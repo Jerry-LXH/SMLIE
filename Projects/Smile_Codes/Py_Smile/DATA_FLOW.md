@@ -127,37 +127,44 @@ flowchart TD
 - **`Emitter.loc_idx`** 是指回源 `Localizations` 的行索引，因此 `photons/sigma/bg` 等不回存到 Emitter，需用 `locs.photons[emitter.loc_idx]` 取回。
 - **`DriftTrace`** 的 `dx`/`dy` 是"坐标要减去的量"，图像平移方向与之相反。
 - **轨迹 vs 定位粒度**：`Localizations` 每个点一条记录；`Trace` 每条 emitter 一条稠密序列（含暗帧），两者通过 `emitter_id`/`loc_idx` 关联。
-- **注册机制**：`smlm/trace` 的 `methods/__init__.py` 必须在导入时执行，`@register_analyzer` 装饰器才会把算法填入注册表，`get_analyzer()` 才能找到（当前内置 `changepoint`，HMM 等可扩展）。
+- **trace 状态是策略类**：`smlm/trace/states.py` 的 `ThresholdStates` / `ChangepointStates` 都是"吃 `list[Trace]`、就地补 `state`/`n_on`/`bleach_frame` 字段"，没有注册表也不用装饰器；`select_traces(traces, n_on=..., n_switches=...)` 按统计量筛。
 
 ---
 
-## 4. 快速上手（对应 `test_proess.ipynb`）
+## 4. 快速上手
+
+对应 notebook：
+- `smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
+- `smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
+- `smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
+- `smTest_dual_batch.ipynb` —— 批量处理（待续）
 
 ```python
-from smlm.io import load_raw
+from smlm.io import load_raw, run_cached
 from smlm.camera import EMCCD
-from smlm.imgprocess import Pipeline, Crop, SelectFrames
-from smlm.localize import ClassicalPipeline, LocalMaxDetector, MLELocalizer, filter_locs
-from smlm.io import run_cached
+from smlm.imgprocess import Pipeline, Crop, SelectFrames, DriftCorrector
+from smlm.localize import LocalMaxDetector, MLELocalizer, filter_locs, localize_stack
 from smlm.drift import CloudDriftEstimator
-from smlm.imgprocess import DriftCorrector      # 校正侧在 imgprocess
-from smlm.emitter import analyze_emitters, collect_statistics
-from smlm.trace import ApertureSpec, extract_channel, analyze_traces
+from smlm.emitter import analyze_emitters_sm, collect_statistics
+import smlm.trace as tr
 
-raw     = load_raw("xxx.sif")                              # RawDataset
-image   = EMCCD(conv_factor=5.75, em_gain=raw.em_gain).process(raw, pixel_size=106.6)  # ImageStack
-stack   = Pipeline(Crop(y=(100,400), x=(100,400)), SelectFrames(stop=500))(image)      # ImageStack
-method  = ClassicalPipeline(LocalMaxDetector(...), MLELocalizer(...))
-locs    = run_cached(method, stack, src)                   # Localizations（带缓存）
-locs    = filter_locs(locs)                                # Localizations
-drift   = CloudDriftEstimator(...).estimate(locs)          # DriftTrace
-corr_image, corr_locs, keep = DriftCorrector(crop=(257,257)).apply(drift, image=stack, locs=locs)
-emitters, _ = analyze_emitters(corr_locs, n_frames=None, ...)   # list[Emitter]
-stats   = collect_statistics(emitters, locs, raw.exposure_time, 0)  # EmitterStats
+raw   = load_raw("xxx.sif")                                          # RawDataset
+image = EMCCD(conv_factor=5.75, em_gain=300).process(raw, pixel_size=106.6)   # ImageStack
+stack = Pipeline(Crop(y=(0, 512), x=(0, 512)), SelectFrames())(image)         # ImageStack
+
+locs = localize_stack(stack, k_sigma=2.6, det_kw=DET_KW, loc_kw=LOC_KW,
+                      filt_kw=FILT_KW, src_path="xxx.sif", read_cache=True)   # Localizations
+drift = CloudDriftEstimator(...).estimate(locs[locs.frame < stack.n_frames])  # DriftTrace
+corr_image, corr_locs, keep = DriftCorrector(crop=(257, 257)).apply(drift, image=stack, locs=locs)
+emitters, _ = analyze_emitters_sm(corr_locs, n_frames=None, search_radius=0.6,
+                                  max_gap=1000, min_frames=10, do_merge=True)  # list[Emitter]
+stats  = collect_statistics(emitters, locs, raw.exposure_time, 0)             # EmitterStats
+
+# trace: fill pipeline 里叠一组"取亮度的方法"，状态类也是 filler
 centers_yx = np.array([[e.centroid[1], e.centroid[0]] for e in emitters])   # [row, col]
-traces  = extract_channel(corr_image.data, centers_yx,              # list[Trace]
-                          spec=ApertureSpec(mode='hard', radius=3),
-                          n_frames=corr_image.n_frames, locs=corr_locs,
-                          mask_centers_yx=None)      # None = ? centers_yx ??
-results = analyze_traces(traces, method="changepoint", penalty=3, bleach_tail=50)       # list[StateResult]
+fillers = [tr.ApertureRaw(mode='hard', radius=3), tr.AnnulusRing(gap=2, width=4, excl_radius=3),
+           tr.IntensityFromRawBg(), tr.PoissonSNR(),
+           tr.ThresholdStates()]              # 补 state / n_on / bleach_frame
+traces  = tr.TraceFillPipeline(corr_image.data, centers_yx, sigma=1.6, tag='r').run(fillers)
+tr.select_traces(traces, n_on=(2, None))
 ```

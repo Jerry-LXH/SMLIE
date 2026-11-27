@@ -1,21 +1,11 @@
 # smlm/fret/viz.py
-"""复核界面用的渲染: 直接吐 PNG bytes。
+"""FRET 诊断图: trace 对画廊、γ 标定点、E 分布。
 
-为什么不把 matplotlib 图丢进 ``ipywidgets.Output``
------------------------------------------------
-inline 后端里 figure 的归属取决于创建时刻的 capture 上下文; 在 ``Output`` 之外
-创建、又在里面 ``plt.show()``, 很容易被 display 两次。再加上 ``clear_output`` 在
-VS Code 里不可靠, 切换条目时旧图会留在原地叠上去。
-
-所以这里一律"渲染成 PNG → 塞进 ``W.Image``": 确定、无重复、快。
-
-视频帧也**不做放大**: 41x84 的灰度噪声图放大 5 倍后 PNG 压不动(单帧 60~120 KB),
-200 帧按 80 ms 播放就是 1~2 MB/s 的通信量 —— 这才是卡的原因。保持原生分辨率
-(2~5 KB/帧), 放大交给前端 CSS。
+一律返回 matplotlib ``Figure``, 由调用方决定怎么显示/保存。横轴统一用秒
+(``ex_time``), 因为"多久"比"第几帧"更容易读。
 """
 from __future__ import annotations
 
-import io
 import numpy as np
 
 
@@ -34,56 +24,6 @@ def crop_centered(vol, cy, cx, half):
     if rr1 > rr0 and cc1 > cc0:
         out[:, rr0 - r0:rr1 - r0, cc0 - c0:cc1 - c0] = vol[:, rr0:rr1, cc0:cc1]
     return out
-
-
-def to_uint8(a, pct=99.7):
-    hi = float(np.percentile(a, pct)) if a.size else 1.0
-    return np.clip(a / (hi if hi > 0 else 1.0) * 255.0, 0, 255).astype(np.uint8)
-
-
-def _draw_ring(a, cy, cx, rad, val=255):
-    """在 uint8 图上画半径 rad 的方框(越界自动裁)。"""
-    H, W = a.shape
-    r0, r1 = max(0, cy - rad), min(H - 1, cy + rad)
-    c0, c1 = max(0, cx - rad), min(W - 1, cx + rad)
-    a[r0, c0:c1 + 1] = val
-    a[r1, c0:c1 + 1] = val
-    a[r0:r1 + 1, c0] = val
-    a[r0:r1 + 1, c1] = val
-
-
-def _png(arr_gray, scale=1):
-    from PIL import Image
-    im = Image.fromarray(arr_gray, 'L')
-    if scale != 1:
-        im = im.resize((im.width * scale, im.height * scale), Image.NEAREST)
-    buf = io.BytesIO()
-    im.save(buf, format='PNG', optimize=False)
-    return buf.getvalue()
-
-
-def render_movie_pngs(img_d, img_a, centre_d, centre_a, *, half=20, step=10,
-                      radius_d=5, radius_a=4, gap=2, pct=99.7):
-    """双通道小视频帧(左=供体/绿, 右=受体/红), **原生分辨率**。
-
-    Returns
-    -------
-    (pngs, frames)
-    """
-    g = crop_centered(img_d, centre_d[0], centre_d[1], half)
-    r = crop_centered(img_a, centre_a[0], centre_a[1], half)
-    g8, r8 = to_uint8(g, pct), to_uint8(r, pct)
-    n = 2 * int(half) + 1
-    sep = np.full((n, int(gap)), 255, np.uint8)
-
-    frames = np.arange(0, g.shape[0], int(step))
-    pngs = []
-    for f in frames:
-        a = np.concatenate([g8[f], sep, r8[f]], axis=1).copy()
-        _draw_ring(a, half, half, radius_d)                    # 供体孔径
-        _draw_ring(a, half, n + int(gap) + half, radius_a)     # 受体孔径
-        pngs.append(_png(a))
-    return pngs, frames
 
 
 # ---------------------------------------------------------------------------
@@ -145,25 +85,6 @@ def plot_pair(ax, trace_a, trace_d, ev=None, *, ex_time=1.0, mle_a=None,
     if title:
         ax.set_title(title, fontsize=7)
     return ax
-
-
-def render_trace_png(trace_a, trace_d, ev=None, *, ex_time=1.0, mle_a=None,
-                     mle_d=None, pre_win=100, post_win=400, cal=None,
-                     figsize=(7.6, 3.0), dpi=105, title=None):
-    """双通道 trace + **估计的背景** + MLE 对照 (PNG bytes, 给复核界面用)。
-
-    绘图本体见 :func:`plot_pair`; 这里只负责建图、导出。
-    """
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-    plot_pair(ax, trace_a, trace_d, ev, ex_time=ex_time, mle_a=mle_a,
-              mle_d=mle_d, pre_win=pre_win, post_win=post_win, title=title)
-    fig.tight_layout()
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    plt.close(fig)
-    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------

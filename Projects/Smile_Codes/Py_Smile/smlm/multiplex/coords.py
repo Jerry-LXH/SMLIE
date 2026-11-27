@@ -45,11 +45,6 @@ def _as_window(w):
     return (int(y0), int(x0), int(h), int(ww))
 
 
-def window_from_range(y, x):
-    """``(y0,y1), (x0,x1)`` -> ``(y0, x0, h, w)``。"""
-    return (int(y[0]), int(x[0]), int(y[1]) - int(y[0]), int(x[1]) - int(x[0]))
-
-
 def _perimeter(y0, x0, h, w, n=64):
     """矩形窗口四边上均匀取点(探测器坐标), 用于精确求映射后的包围盒。"""
     t = np.linspace(0.0, 1.0, int(n))
@@ -59,29 +54,6 @@ def _perimeter(y0, x0, h, w, n=64):
         np.column_stack([np.full_like(t, x0), y0 + t * h]),
         np.column_stack([np.full_like(t, x0 + w), y0 + t * h]),
     ])
-
-
-def calib_windows_from_roi(roi, reference='g', moving='r'):
-    """从 ``calib.roi`` 还原标定窗口 ``{通道: (y0, x0, h, w)}``。
-
-    兼容两种写法:
-      * 新写法(取框可人工指定): ``green_x`` / ``red_x`` 给列范围,
-        ``ref_rows`` / ``mov_rows`` 给各自的行范围;
-      * 旧写法: 只有 ``green_x`` / ``red_x``, 行范围两通道共用 ``row_range``。
-    """
-    ry0, ry1 = (int(v) for v in roi.get('row_range', (0, 0)))
-    out = {}
-    for ch, xkey, rkey in ((reference, 'green_x', 'ref_rows'),
-                           (moving, 'red_x', 'mov_rows')):
-        if xkey not in roi:
-            continue
-        x0, x1 = (int(v) for v in roi[xkey])
-        if rkey in roi:
-            y0, y1 = (int(v) for v in roi[rkey])
-        else:
-            y0, y1 = ry0, ry1
-        out[ch] = (y0, x0, y1 - y0, x1 - x0)
-    return out
 
 
 def calib_windows_from_calibs(calibs, reference):
@@ -457,43 +429,3 @@ def map_channel_xy(xy, geom, source, target):
 # ---------------------------------------------------------------------------
 #  工厂
 # ---------------------------------------------------------------------------
-def geometry_from_multi(multi, calib=None, *, windows=None, margin=None,
-                        check_coverage=True, strict=False):
-    """从 ``MultiImageStack``(各通道已对齐) 构造几何对象。
-
-    ``calib`` 不给时用 ``multi.reg``(即 ``{通道: DualViewCalibration}``)。
-    """
-    channels = list(getattr(multi, 'channels', ['g', 'r']))
-    _, _, h, w = multi.shape
-    if calib is None:
-        calib = dict(getattr(multi, 'reg', {}) or {})
-    if windows is None:
-        offs = getattr(multi, 'offsets', None)
-        if offs is None:
-            raise ValueError('MultiImageStack 缺少 offsets; 请用 build_multi()/'
-                             'cut_pair() 生成, 或显式传 windows=')
-        offs = np.asarray(offs, int)
-        windows = {ch: (int(offs[i, 0]), int(offs[i, 1]), int(h), int(w))
-                   for i, ch in enumerate(channels)}
-    meta = multi.metadata or {}
-    roi_d = meta.get('roi') if isinstance(meta.get('roi'), dict) else {}
-    return DualViewGeometry(
-        windows=windows, calib=calib,
-        reference=channels[int(getattr(multi, 'reference', 0))],
-        roi=roi_d or None,
-        margin=int(margin if margin is not None else roi_d.get('margin', 0)),
-        check_coverage=check_coverage, strict=strict)
-
-
-def geometry_from_crops(calib, crop_g, crop_r, *, reference='g', moving='r',
-                        margin=0, check_coverage=True, strict=False):
-    """从"两通道各自的裁切范围"构造几何对象。
-
-    ``crop_g`` / ``crop_r`` 形如 ``dict(y=(y0,y1), x=(x0,x1))``, 探测器坐标。
-    这正是 notebook 里 ``Crop(y=g_y, x=g_x)`` 那种写法最容易记错偏移的地方。
-    """
-    return DualViewGeometry(
-        windows={reference: window_from_range(**crop_g),
-                 moving: window_from_range(**crop_r)},
-        calib=calib, reference=reference, margin=margin,
-        check_coverage=check_coverage, strict=strict)

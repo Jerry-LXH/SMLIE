@@ -1,5 +1,5 @@
 # smlm/fret/io.py
-"""FRET 结果的 CSV 落盘 / 回读。"""
+"""FRET 结果的 CSV 落盘 (长表 / 宽表)。"""
 from __future__ import annotations
 
 import csv
@@ -89,33 +89,3 @@ def save_traces_csv(traces_d, traces_a, t_s, path, verbose=True):
               f'({os.path.getsize(path)} bytes, {len(TRACE_COLS)} cols)')
     return path
 
-
-def load_csv(path):
-    """回读成 dict 列表(数值列转 float, 空串转 nan)。"""
-    with open(path, newline='', encoding='utf-8-sig') as f:
-        rd = list(csv.reader(f))
-    hdr, body = rd[0], rd[1:]
-    out = []
-    for row in body:
-        d = {}
-        for k, v in zip(hdr, row):
-            if v == '':
-                d[k] = np.nan
-            else:
-                try:
-                    d[k] = float(v)
-                except ValueError:
-                    d[k] = v
-        out.append(d)
-    return out
-
-
-def verify(path, n_expect=None):
-    """落盘后自检: 列数、行数、E 的分布。"""
-    rows = load_csv(path)
-    E = np.array([r['E'] for r in rows if np.isfinite(r.get('E', np.nan))])
-    ok = (n_expect is None or len(rows) == n_expect)
-    print(f'  回读 {len(rows)} 行, E 中位 {np.median(E):.4f}, '
-          f'范围 {E.min():.3f}~{E.max():.3f}, E>1 {int((E > 1).sum())} 条'
-          if E.size else f'  回读 {len(rows)} 行, 无有效 E')
-    return ok, rows

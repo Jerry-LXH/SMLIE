@@ -21,7 +21,6 @@ xy 的分量顺序是 (x, y) = (列, 行)。
 ``coarse_offset`` = (dy, dx) = "mov 窗口原点 - ref 窗口原点"(探测器坐标), 它
 **只是元数据**:
   - 报告/诊断: 让人一眼看出两个窗口在探测器上的相对位置;
-  - 传给 ``channels.cut_pair(coarse=...)``, 保证分析窗口与标定窗口同一布局;
   - 供 ``coords.DualViewGeometry`` 做布局一致性检查。
 它**不进入** ``apply_poly`` 的数学 —— 进了反而会错 256 px。
 

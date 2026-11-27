@@ -28,7 +28,7 @@ import json
 import os
 import numpy as np
 
-from .datatypes import StepEvent, passed, CRITERIA_STRICT
+from .datatypes import passed, CRITERIA_STRICT
 
 NPZ_VERSION = 1
 
@@ -217,12 +217,6 @@ def gamma_points(events, traces_a=None, traces_d=None, *, win=4,
 # ---------------------------------------------------------------------------
 #  估计
 # ---------------------------------------------------------------------------
-def select_for_gamma(events, min_snr_d):
-    """γ 只用"绿升信噪比够"的点: 否则 γ 的分母是噪声。"""
-    return [e for e in events
-            if e.dID > min_snr_d * (e.sig_d if np.isfinite(e.sig_d) else 0.0)]
-
-
 def estimate_alpha(events, min_snr_on_d=3.0):
     """α = median(I_A^post / I_D^post): 受体已灭、供体仍亮那一截的串色比。"""
     sel = [e for e in events

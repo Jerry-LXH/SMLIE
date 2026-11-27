@@ -148,19 +148,3 @@ def test_run_cached_read_requires_existing_path():
     with pytest.raises(FileNotFoundError, match='cache not found'):
         run_cached(_stack(), 'missing_cache', read_cache=True)
 
-
-def test_calibrate_dual_view_propagates_read_cache_failures(monkeypatch):
-    kwargs_seen = {}
-
-    def fail_on_missing_cache(path, **kwargs):
-        kwargs_seen.update(kwargs)
-        raise FileNotFoundError('missing localization cache')
-
-    monkeypatch.setattr(multiplex_pipeline, 'calib_one_file',
-                        fail_on_missing_cache)
-    with pytest.raises(FileNotFoundError, match='missing localization cache'):
-        multiplex_pipeline.calibrate_dual_view(
-            ['sample.sif'], read_cache=True, verbose=False)
-
-    assert kwargs_seen['read_cache'] is True
-
