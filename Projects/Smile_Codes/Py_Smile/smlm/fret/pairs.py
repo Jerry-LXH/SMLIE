@@ -7,6 +7,10 @@
 与 E 的大小无关 ——
 
 ``red``      整条红光 ``intensity`` 的最大值 < ``red_min``: 这个孔径里根本没受体。
+``duty``     台阶前 ``pre_duty_win`` 帧里受体 ON 的占比 < ``red_duty_min``: 这个
+             "台阶"只是一次**闪光的结束**, 不是漂白。闪烁的受体有大量亮段结束,
+             :func:`~smlm.fret.events.find_step` 只能保证挑到最像的那一个, 却
+             保证不了它真的是漂白 —— 这一条负责收尾。
 ``event``    :func:`~smlm.fret.events.find_step` 找不到"红降 + 绿升"台阶。
 ``flags``    ``EventSpec`` 的物理硬门限: 台阶前受体在发光、台阶后真的灭掉、红降显著、
              绿升显著且持续、去淬灭后供体在发光。
@@ -21,6 +25,19 @@
               ≤ ``after_duty``)。用占空比而不是 p95: p95 是"灭后有没有再亮过",
               **会闪的受体在 200 帧里几乎必然再亮一次**, 于是被误判成"孔径里有
               ̄第二个受体"; 占空比才真正区分"另一个常亮的受体"和"同一个分子在闪"。
+
+``spread`` / ``after`` 与受体状态
+--------------------------------
+:func:`~smlm.fret.events.red_state` 把受体分成 ``steady`` / ``blinking`` /
+``dark`` / ``unbleached``, 而 ``find_step`` 把受体的逐帧 ON 掩码挂在
+``event.red_on`` 上。两条判据据此分工:
+
+* ``spread`` **按 ON 掩码取帧**: 受体熄灭的间隙里供体去淬灭变亮是物理行为,
+  不是污染; 只有在受体亮着时仍然忽明忽暗才是"孔径里有别人"。受体平稳时掩码
+  全 True, 行为与以前完全一致。
+* ``after`` 用 ``blink_relax`` 放宽: 会闪的受体灭后再亮几帧属正常。
+
+``attr`` (孔径里有几个绿光分子) 与受体状态无关: 多重标记是真实污染。
 
 **刻意没有** ``I_D^pre ≤ f·I_D^post`` 这一条: 那个比值就是 ``1 − E``, 拿它当质量
 门限等于"按 E 筛分子", 会把低 E 的好分子全砍掉, 而且筛完就不能再拿这批数据报告
@@ -40,7 +57,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from .datatypes import CRITERIA, CRITERIA_STRICT, passed
-from .events import EventSpec, find_step
+from .events import EventSpec, find_step, red_state
 
 __all__ = ['PairCriteria', 'PairRecord', 'select_pairs', 'noise_per_frame',
            'pre_spread', 'donor_stats', 'attach_efficiency', 'FUNNEL']
@@ -48,6 +65,7 @@ __all__ = ['PairCriteria', 'PairRecord', 'select_pairs', 'noise_per_frame',
 # 漏斗顺序 (也是 reasons 的排列顺序)
 FUNNEL = (('event', '没找到红降+绿升台阶'),
           ('red', '漂白前窗口不够亮'),
+          ('duty', '漂白前红光不连续'),
           ('flags', '物理门限不合格'),
           ('spread', 'pre 窗绿光不平稳'),
           ('attr', '孔径内绿光分子 > 1'),
@@ -73,6 +91,15 @@ class PairCriteria:
     ``pre_win``
         "洁净度"检查用的台阶前窗口 (帧)。这是**诊断窗**, 与 ``EfficiencySpec.pre_win``
         (算 E 用的窗) 无关。
+    ``pre_duty_win`` / ``red_duty_min``
+        受体状态的统计窗 (帧) 与"台阶前 ON 占空比"下限。受体的 ON 掩码是迟滞
+        二值化得到的, 占空比低说明这个台阶只是**一次闪光的结束**而不是漂白 ——
+        这类候选的 ``I_A^pre`` 是半亮的, ``ΔI_A`` / ``ΔI_D`` 全被低估, 后面每条
+        判据都在跟一个假信号较劲。``None`` = 不做这项检查 (对完全不闪的样品)。
+    ``blink_relax``
+        受体被判为 ``blinking`` 时 ``after_duty`` 的放宽倍数: 受体自己会闪, 灭后
+        再亮几帧是同一个分子在闪, 不是第二个常亮的受体。``1.0`` = 不放宽。
+        ``spread`` **不**靠放宽, 它按受体 ON 掩码取帧 (见 :func:`pre_spread`)。
     ``k_spread``
         pre 窗归一化离散度上限 (1 = 纯光子噪声)。大 = 该窗里有闪烁的邻居。
     ``attr_scale`` / ``attr_px``
@@ -97,6 +124,9 @@ class PairCriteria:
     red_win: int = 10
     lag_max: int = 10
     pre_win: int = 60
+    pre_duty_win: int = 150
+    red_duty_min: float | None = 0.5
+    blink_relax: float = 2.0
     k_spread: float = 2.5
     attr_scale: float = 0.8
     attr_px: float = 3.0
@@ -112,9 +142,11 @@ class PairCriteria:
         nb = '不限' if self.neighbours_max is None else f'≤{self.neighbours_max}'
         af = ('p95 口径' if self.after_duty is None
               else f'占空比≤{self.after_duty:.0%}')
+        dt = ('不查' if self.red_duty_min is None
+              else f'红光 ON 占比≥{self.red_duty_min:.0%}')
         return (f'PairCriteria(漂白前 {self.red_win} 帧中位 ≥{self.red_min:.0f}, '
-                f'lag≤{self.lag_max} 帧, pre 窗 {self.pre_win} 帧 '
-                f'离散度≤{self.k_spread:g}σ, '
+                f'{dt}, lag≤{self.lag_max} 帧, pre 窗 {self.pre_win} 帧 '
+                f'离散度≤{self.k_spread:g}σ (受体亮帧), '
                 f'孔径 {self.attr_scale:g}×r 内 ≤{self.max_n_pre} 个, '
                 f'环内邻居 {nb}, 灭后 {af})')
 
@@ -133,6 +165,12 @@ class PairRecord:
     red_after: float = np.nan            # 灭后 p95(intensity), 仅诊断
     red_after_thr: float = np.nan
     red_after_duty: float = np.nan        # 灭后超过阈值的帧占比 (判据用)
+    red_duty: float = np.nan              # 台阶前 ON 占空比 (判据用)
+    red_n_off: int = -1                   # 台阶前暗段数
+    red_post_ratio: float = np.nan        # 灭后电平 / 亮态电平
+    red_label: str = 'unknown'            # RedState.label
+    n_pre_gate: int = -1                  # pre 窗里受体亮着 (参与统计) 的帧数
+    after_duty_eff: float = np.nan        # 实际用的灭后占空比上限
     # --- 绿光洁净度 ---
     spread: float = np.nan               # pre 窗离散度 / 实测噪声 (1 = 纯噪声)
     pre_level: float = np.nan            # pre 窗中位亮度 / σ (单位 σ)
@@ -187,12 +225,18 @@ def noise_per_frame(trace):
     return noise / sw2
 
 
-def pre_spread(trace_d, j, pre_win):
+def pre_spread(trace_d, j, pre_win, gate=None):
     """台阶前绿光的归一化离散度与相对电平。
 
     参照噪声用 **pre 窗自己的实测噪声** (``robust_noise``, 逐帧差分的 MAD), 而不是
     光子预算公式: 实测里公式常常把噪声高估一个量级 (环形背景的涨落被算了两遍),
     用它当分母会让 ``k_spread`` 实际上松掉 10 倍、一条都筛不掉。
+
+    ``gate``
+        逐帧布尔掩码 (与 trace 等长), True 的帧才计入。传**受体 ON 掩码**进来:
+        受体熄灭的间隙里供体本来就会去淬灭变亮, 那是物理行为而不是污染, 把它算
+        进离散度会把"会闪但干净"的分子全判成"孔径里有别人"。σ 也只在掩码内
+        相邻两帧之间取差分, 免得跨越间隙的跳变冒充噪声。``None`` = 用整个窗。
 
     Returns
     -------
@@ -210,23 +254,40 @@ def pre_spread(trace_d, j, pre_win):
         return np.nan, np.nan, np.nan
     seg = I[a:b]
     ok = np.isfinite(seg)
+    if gate is not None:
+        ok &= np.asarray(gate, bool)[a:b]
     if ok.sum() < 5:
         return np.nan, np.nan, np.nan
-    seg = seg[ok]
+    seg_ok = seg[ok]
     sig = np.asarray(noise_per_frame(trace_d), float)[a:b][ok]
     s_bud = float(np.nanmedian(sig)) if np.isfinite(sig).any() else np.nan
 
-    s = float(robust_noise(seg))
+    if gate is None:
+        s = float(robust_noise(seg_ok))
+    else:
+        s = _noise_within_gate(seg, ok)
+        if not np.isfinite(s):
+            s = float(robust_noise(seg_ok))
     # 窗内几乎没有起伏时给 σ 一个下限 (取较大值, **不**替换实测值): 否则 0 除。
     # 下限只取预算的 2%, 所以预算被高估一个量级时实测值依然生效。
     if np.isfinite(s_bud) and s_bud > 0:
         s = max(s, 0.02 * s_bud)
     if not np.isfinite(s) or s <= 0:
         return np.nan, np.nan, np.nan
-    p16, p84 = np.percentile(seg, [16, 84])
+    p16, p84 = np.percentile(seg_ok, [16, 84])
     ratio = float(s_bud / s) if (np.isfinite(s_bud) and s > 0) else np.nan
     return (float((p84 - p16) / (_P16P84 * s)),
-            float(np.median(seg) / s), ratio)
+            float(np.median(seg_ok) / s), ratio)
+
+
+def _noise_within_gate(seg, ok, min_pairs=5):
+    """只取**掩码内相邻两帧**的差分估 σ (跨越间隙的跳变不算噪声)。"""
+    dy = np.diff(np.asarray(seg, float))
+    pair = ok[1:] & ok[:-1] & np.isfinite(dy)
+    dy = dy[pair]
+    if dy.size < int(min_pairs):
+        return np.nan
+    return float(np.median(np.abs(dy - np.median(dy))) / 0.6745 / np.sqrt(2))
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +419,12 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
         ev.emitter_id = int(emitter_id)
         j, lag = int(ev.frame), int(ev.lag)
         rec.IA_pre_win = pre_bleach_level(trace_a, j, crit.red_win)
+        # pre 窗只统计"受体亮着"的帧: 受体熄灭的间隙里供体去淬灭是物理行为
+        gate = getattr(ev, 'red_on', None)
         rec.spread, rec.pre_level, rec.noise_ratio = pre_spread(
-            trace_d, j, crit.pre_win)
+            trace_d, j, crit.pre_win, gate=gate)
+        rec.n_pre_gate = (int(np.count_nonzero(np.asarray(gate, bool)[
+            max(0, j - crit.pre_win):j])) if gate is not None else -1)
         st = donor_stats(tree, emitters_d, (trace_d['x'], trace_d['y']), j, lag,
                          pre_win=crit.pre_win, post_win=crit.post_win,
                          r_attr=rec.radius, min_locs=crit.attr_min_locs,
@@ -372,6 +437,17 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
         rec.red_after = _p95(tail)
         rec.red_after_duty = (float(np.mean(tail > rec.red_after_thr))
                               if tail.size else np.nan)
+        # 受体状态: 平稳/闪烁/闪光结束/没真灭 —— 决定供体判据能有多严
+        rs = getattr(ev, 'red_state', None)
+        if rs is None:      # 交互式会话里拿到的是旧 StepEvent
+            rs = red_state(ia, j, float(ev.sig_a), window=crit.pre_duty_win,
+                           post_win=crit.post_win, off_ratio=spec.off_ratio)
+        rec.red_duty, rec.red_n_off = rs.duty, rs.n_off
+        rec.red_post_ratio, rec.red_label = rs.post_ratio, rs.label
+        # 受体自己在闪时, 灭后的少量再亮是同一个分子在闪, 不是第二个受体
+        relax = (float(crit.blink_relax) if rs.label == 'blinking' else 1.0)
+        rec.after_duty_eff = (np.nan if crit.after_duty is None
+                              else min(1.0, float(crit.after_duty) * relax))
 
     # ---- 判据 (顺序 = FUNNEL) ----
     if ev is None:
@@ -380,6 +456,10 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
         # 受体在"漂白"之前必须真的在发亮: 台阶前 red_win 帧的中位亮度
         if not np.isfinite(rec.IA_pre_win) or rec.IA_pre_win <= crit.red_min:
             rec.reasons.append('red')
+        # 而且要**连续**亮着: 占空比低 = 这个台阶只是一次闪光的结束
+        if (crit.red_duty_min is not None and np.isfinite(rec.red_duty)
+                and rec.red_duty < float(crit.red_duty_min)):
+            rec.reasons.append('duty')
         # 记录**全部** 7 条子判据的结果 (含没纳入 require 的 drop_d) 便于诊断
         rec.failed_flags = [k for k in CRITERIA if not ev.flags.get(k, False)]
         if any(k in set(crit.require) for k in rec.failed_flags):
@@ -394,7 +474,7 @@ def _diagnose(trace_a, trace_d, emitter_id, *, tree, emitters_d, crit, spec):
             if np.isfinite(rec.red_after) and rec.red_after > rec.red_after_thr:
                 rec.reasons.append('after')
         elif (np.isfinite(rec.red_after_duty)
-              and rec.red_after_duty > float(crit.after_duty)):
+              and rec.red_after_duty > rec.after_duty_eff):
             rec.reasons.append('after')
     rec.keep = not rec.reasons
     return rec

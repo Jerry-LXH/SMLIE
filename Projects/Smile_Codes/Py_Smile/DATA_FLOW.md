@@ -260,8 +260,8 @@ smlm/
 | `pair.py` | `PairSet` / `pair_channels` / `pair_multichannels` / `merge_pairs`：一对一配对（三条约束）与多文件合并 |
 | `pipeline.py` | `pair_multichannel_files`（逐文件配对）、`fit_multichannel_pairs`（合并拟合）、`multichannel_stack_from_calibration`（按 bundle 取框）、`localize_channel`、`mean_frame` |
 | `drift.py` | 多通道漂移：`CropWindow`、`estimate_drift_multi`（一次估计、按几何换算到各通道）、`correct_multi`、`drift_crop_window`、`drift_requirements`、`merge_registered` |
-| `emitters.py` | `analyze_multichannel_emitters`：**逐通道各自聚类**（用本通道自己的定位），`channel_locs` / `channel_names` / `emitter_centers_xy` |
-| `traces.py` | `extract_multichannel_traces`：每通道可指定"用哪个通道的 emitter 当中心"和"用哪个通道的背景屏蔽"，输出 `{通道: list[Trace]}` |
+| `emitters.py` | `analyze_multichannel_emitters`：**逐通道各自聚类**（用本通道自己的定位），`channel_locs` / `channel_names` / `emitter_centers_xy` / `psf_sigma_from_locs`（逐通道拟合宽度中位 → 取 trace 用的 σ） |
+| `traces.py` | `extract_multichannel_traces`：每通道可指定"用哪个通道的 emitter 当中心"和"用哪个通道的背景屏蔽"，输出 `{通道: list[Trace]}`。`sigma` 收 `{通道: px}`，**用 `psf_sigma_from_locs` 的结果**：`0.2165·λ/NA` 的理论值在有轻微离焦时明显偏小（实测 0.93 vs 1.43 px），孔径半径被夹到 2 px、匹配滤波幅度衰减到 ~0.6，所有绝对门限都跟着失真 |
 | `viz.py` | `plot_multichannel_crop`、`plot_multichannel_roi`、`plot_multichannel_localizations`、`plot_multi_drift`、`plot_drift_fov`、`plot_channel_traces`、`plot_displacement_field`、`plot_residual_hist`、`plot_residual_map`、`plot_overview` |
 
 ### 3.10 `smlm/fret` — 双通道 FRET
@@ -273,10 +273,10 @@ smlm/
 
 | 文件 | 内容 |
 |---|---|
-| `events.py` | `EventSpec` / `find_step` / `scan_steps` / `post_level`：受体侧把**每个亮段的结束**当候选台阶（迟滞二值化，闪烁的暗隙不再冒充漂白），供体侧用亮帧中位；带 7 条物理门限 |
-| `pairs.py` | `PairCriteria` / `select_pairs`：漏斗式筛选（event → red → flags → spread → attr → neigh → after），逐级记录否决原因 |
+| `events.py` | `EventSpec` / `find_step` / `scan_steps` / `post_level` / `red_state`：受体侧把**每个亮段的结束**当候选台阶（迟滞二值化，闪烁的暗隙不再冒充漂白），供体侧用亮帧中位；带 7 条物理门限。事件上附 `red_state`（平稳/闪烁/闪光结束/没真灭）与 `red_on`（受体逐帧 ON 掩码） |
+| `pairs.py` | `PairCriteria` / `select_pairs`：漏斗式筛选（event → red → duty → flags → spread → attr → neigh → after），逐级记录否决原因。`spread` **只在受体亮着的帧上**量；`blinking` 时 `after` 按 `blink_relax` 放宽 |
 | `calibrate.py` | `calibrate` / `FretCalibration`（可落盘）/ `gamma_points` / `local_step` / `estimate_alpha` / `estimate_beta` / `estimate_gamma` / `robust_line` |
-| `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验） |
+| `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验）。`I_A^pre` / `I_D^pre` 只平均**受体亮着的帧**（受体闪时，熄灭间隙里供体已去淬灭，混进来会把 E 压低） |
 | `datatypes.py` | `StepEvent` / `FretResult` / `CRITERIA` / `CRITERIA_STRICT` / `passed`：FRET 专用类型与判据名 |
 | `io.py` | `save_csv`（逐分子） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
 | `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 就不写未筛选的那张表）；只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名 |
@@ -302,7 +302,7 @@ smlm/
 - `smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
 - `smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
 - `smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
-- `smTest_dual_batch.ipynb` —— 批量处理（待续）
+- `smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
 
 ```python
 from smlm.io import load_raw, run_cached
@@ -330,6 +330,11 @@ centers_yx = np.array([[e.centroid[1], e.centroid[0]] for e in emitters])   # [r
 fillers = [tr.ApertureRaw(mode='hard', radius=3), tr.AnnulusRing(gap=2, width=4, excl_radius=3),
            tr.IntensityFromRawBg(), tr.PoissonSNR(),
            tr.ThresholdStates()]              # 补 state / n_on / bleach_frame
-traces  = tr.TraceFillPipeline(corr_image.data, centers_yx, sigma=1.6, tag='r').run(fillers)
+traces  = tr.TraceFillPipeline(corr_image.data, centers_yx, sigma=ph, tag='r').run(fillers)
 tr.select_traces(traces, n_on=(2, None))
 ```
+
+`sigma=ph` 用**拟合宽度**（`np.median(corr_locs.sigma)`，多通道下用
+`mp.psf_sigma_from_locs(multiLocs)`），不要用 `0.2165·λ/NA` 的理论值：实测有轻微
+离焦/色差时理论值偏小 40% 以上，孔径半径被 `[2,7]` px 夹住（2 px vs 3 px），
+匹配滤波幅度衰减到 ~0.6，`intensity` 的绝对标度随之失真。

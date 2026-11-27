@@ -30,6 +30,8 @@ class StepEvent:
     dID: float                      # 绿升(抗闪烁口径, 用亮态电平)
     dID_long: float                 # 绿升(长窗**纯中位数**口径, 仅供诊断: 闪烁会让它偏低)
     n_on_d: int = -1                # 长窗内处于亮态的帧数
+    red_state: object = None        # RedState: 受体是平稳/闪烁/闪光结束/没真灭
+    red_on: object = None           # 受体逐帧 ON 掩码 (bool 数组), pre 窗按它取帧
     sig_a: float = np.nan           # 受体通道白噪声 σ
     sig_d: float = np.nan           # 供体通道白噪声 σ
     score: float = np.nan

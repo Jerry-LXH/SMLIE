@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from smlm.fret.calibrate import local_step
-from smlm.fret.events import EventSpec, find_step, post_level
+from smlm.fret.events import EventSpec, find_step, post_level, red_state
 
 F, J, LAG = 400, 200, 2
 SD_N = 20.0          # 红通道白噪声
@@ -39,6 +39,64 @@ def _step(ia, idd, spec=None):
     ev = find_step(ia, idd, None, None, spec or EventSpec(lag_max=10))
     assert ev is not None
     return ev
+
+
+# ---------------------------------------------------------------------------
+#  受体状态: 平稳 / 闪烁 / 闪光结束 / 没真灭
+# ---------------------------------------------------------------------------
+def test_red_state_reports_steady_before_a_real_bleach():
+    ia, _ = _pair()
+    st = red_state(ia, J, None)
+    assert st.label == 'steady'
+    assert st.duty == pytest.approx(1.0)
+    assert st.n_off == 0
+    assert st.post_ratio < 0.1          # 灭后掉到背景
+
+
+def test_red_state_calls_a_short_flash_dark():
+    """只亮 60 帧就"灭" -> 台阶前窗口大部分是暗的, 这是一次闪光的结束。"""
+    rng = np.random.default_rng(0)
+    ia = np.full(F, 5.0)
+    ia[J - 60:J] = 3000.0
+    st = red_state(ia + rng.normal(0, 20.0, F), J, None)
+    assert st.label == 'dark'
+    assert st.duty == pytest.approx(60 / 150, abs=0.05)
+
+
+def test_red_state_reports_blinking_before_the_step():
+    rng = np.random.default_rng(0)
+    on = (np.arange(F) % 10) < 8                     # 亮 8 / 灭 2
+    ia = np.where(on, 3000.0, 5.0)
+    ia[J:] = 5.0
+    st = red_state(ia + rng.normal(0, 20.0, F), J, None)
+    assert st.label == 'blinking'
+    assert st.duty == pytest.approx(0.8, abs=0.05)
+    assert st.n_off > 5                              # 台阶前闪了很多次
+
+
+def test_red_state_reports_unbleached_when_the_level_returns():
+    rng = np.random.default_rng(0)
+    ia = np.full(F, 3000.0)
+    ia[J:J + 20] = 5.0                               # 只是暗隙, 之后又亮了
+    st = red_state(ia + rng.normal(0, 20.0, F), J, None)
+    assert st.label == 'unbleached'
+    assert st.post_ratio > 0.9
+
+
+def test_red_state_is_unknown_without_a_detectable_level():
+    rng = np.random.default_rng(1)
+    st = red_state(30.0 + rng.normal(0, 20.0, F), J, None)
+    assert st.label == 'unknown'
+    assert not np.isfinite(st.duty)
+
+
+def test_find_step_attaches_the_acceptor_on_mask():
+    """pre 窗的统计要按它取帧, 所以掩码必须跟着事件一起走。"""
+    ia, idd = _pair()
+    ev = _step(ia, idd)
+    on = ev.red_on
+    assert on.shape == ia.shape and on.dtype == bool
+    assert on[:J].mean() > 0.95 and on[J + 5:].mean() < 0.05
 
 
 # ---------------------------------------------------------------------------

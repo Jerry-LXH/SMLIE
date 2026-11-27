@@ -44,7 +44,8 @@ from .drift import (CropWindow, correct_multi, drift_crop_window,
                     drift_requirements, estimate_drift_multi,
                     merge_registered)
 from .emitters import (analyze_multichannel_emitters, channel_locs,
-                       channel_names, emitter_centers_xy)
+                       channel_names, emitter_centers_xy,
+                       psf_sigma_from_locs)
 from .traces import extract_multichannel_traces
 from . import viz
 from .viz import (plot_displacement_field, plot_residual_hist,
@@ -77,6 +78,7 @@ __all__ = [
     # 多通道 emitter 聚类
     'analyze_multichannel_emitters', 'channel_locs', 'channel_names',
     'emitter_centers_xy', 'extract_multichannel_traces',
+    'psf_sigma_from_locs',
     # 可视化
     'viz', 'plot_displacement_field', 'plot_residual_hist', 'plot_residual_map',
     'plot_overview', 'plot_multichannel_localizations',

@@ -4,7 +4,8 @@ import pytest
 from smlm.datatypes import Emitter, Localizations, MultiImageStack
 from smlm.multiplex import (DualViewCalibration, DualViewGeometry,
                             analyze_multichannel_emitters, emitter_centers_xy,
-                            extract_multichannel_traces, map_channel_xy)
+                            extract_multichannel_traces, map_channel_xy,
+                            psf_sigma_from_locs)
 import smlm.trace as tr
 from smlm.trace import ApertureRaw, TraceFillPipeline, as_centers_yx
 
@@ -69,6 +70,33 @@ def test_emitter_centers_xy_uses_centroid_order():
     centers = emitter_centers_xy([_emitter(4.0, 8.0), _emitter(11.0, 13.0)])
     np.testing.assert_allclose(centers, [[4.0, 8.0], [11.0, 13.0]])
     assert centers.shape == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+#  PSF σ: 用拟合宽度, 不用理论公式
+# ---------------------------------------------------------------------------
+def test_psf_sigma_from_locs_is_per_channel_and_robust():
+    """红绿两路离焦/色差不同, 必须分开算; 单个离谱的拟合值不能带动结果。"""
+    locs = {'g': _blinking_locs([(5.0, 5.0)], n_frames=11),
+            'r': _blinking_locs([(5.0, 5.0)], n_frames=11)}
+    locs['g'].sigma = np.array([1.30] * 10 + [9.9])     # 一条离谱的拟合
+    locs['r'].sigma = np.full(11, 1.40)
+    out = psf_sigma_from_locs(locs)
+    assert out == pytest.approx({'g': 1.30, 'r': 1.40})   # 中位, 不是均值
+    assert psf_sigma_from_locs(locs, stat='mean', clip=None)['g'] > 2.0
+    assert list(psf_sigma_from_locs(locs)) == ['g', 'r']
+
+
+def test_psf_sigma_from_locs_clips_and_validates():
+    locs = {'g': _blinking_locs([(5.0, 5.0)], n_frames=6)}
+    locs['g'].sigma = np.array([0.1, 1.2, 1.4, 1.6, 99.0, np.nan])
+    assert psf_sigma_from_locs(locs)['g'] == pytest.approx(1.4)   # 剔除离群
+    assert psf_sigma_from_locs(locs, clip=None)['g'] == pytest.approx(1.4)
+    with pytest.raises(ValueError, match='sigma'):
+        psf_sigma_from_locs({'g': _blinking_locs([(5.0, 5.0)], n_frames=6)},
+                            clip=(0.0, 1e-6))       # 全被 clip 掉
+    with pytest.raises(ValueError, match='r'):
+        psf_sigma_from_locs({'g': locs['g']}, channels=['g', 'r'])
 
 
 def test_analyze_multichannel_emitters_clusters_each_channel():

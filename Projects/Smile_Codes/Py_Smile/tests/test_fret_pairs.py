@@ -50,6 +50,25 @@ def _donor(x=10.0, y=10.0, frames=None, n_photons=2000.0):
                    y=np.full(fr.size, float(y)), loc_idx=fr.copy())
 
 
+ON_N, OFF_N = 30, 10        # 受体: 亮 30 帧 / 灭 10 帧
+UNQ = 2500.0                # 供体未被淬灭时的亮度
+
+
+def _anti_correlated(*, id_pre=250.0, sd_a=20.0, sd_d=8.0):
+    """受体在闪, 供体在受体熄灭的间隙里**去淬灭变亮** —— 物理行为, 不是污染。
+
+    受体亮着时供体被淬灭到 ``id_pre``, 受体灭时升到 ``UNQ``; 台阶之后供体常亮。
+    """
+    rng = np.random.default_rng(0)
+    red_on = (np.arange(F) % (ON_N + OFF_N)) < ON_N
+    ia = np.where(red_on, 3000.0, 0.0)
+    ia[J:] = 0.0
+    idd = np.where(red_on, id_pre, UNQ)
+    idd[J + LAG:] = UNQ
+    return (_trace(ia + rng.normal(0, sd_a, F)),
+            _trace(idd + rng.normal(0, sd_d, F))), red_on
+
+
 def _run(pa, pd, emitters=None, **kw):
     crit = P.PairCriteria(**kw)
     recs, stats = P.select_pairs([pa], [pd], emitters_d=emitters,
@@ -210,6 +229,53 @@ def test_after_gate_switches_back_to_p95_when_duty_is_disabled():
     ia[J + 50:J + 70] += 2500.0
     rec, _ = _run(_trace(ia), pd, [_donor()], after_duty=None)
     assert 'after' in rec.reasons       # 老口径: p95 摸到那 20 帧就否
+
+
+def test_flash_ending_is_rejected_by_the_duty_gate():
+    """受体在"漂白"之前大部分时间是暗的 -> 这是一次闪光的结束, 不是漂白。"""
+    rng = np.random.default_rng(0)
+    ia = np.full(F, 5.0)
+    ia[J - 60:J] = 3000.0                    # 只亮 60 帧
+    pa = _trace(ia + rng.normal(0, 20.0, F))
+    pd = _pair()[1]
+
+    rec, _ = _run(pa, pd, [_donor()])
+    assert rec.red_label == 'dark'
+    assert rec.red_duty < 0.5
+    assert 'duty' in rec.reasons and not rec.keep
+    # 关掉这条判据时事件本身还在, 说明拦它的是占空比而不是别的
+    off, _ = _run(pa, pd, [_donor()], red_duty_min=None)
+    assert off.event is not None and 'duty' not in off.reasons
+
+
+def test_pre_spread_ignores_the_donor_lighting_up_in_acceptor_gaps():
+    """受体闪时供体跟着闪是物理行为; 只在受体亮着的帧上量离散度就不会误杀。"""
+    (pa, pd), red_on = _anti_correlated()
+    rec, _ = _run(pa, pd, [_donor()])
+    assert rec.red_label == 'blinking'
+    assert rec.spread < 2.5, f'spread={rec.spread}'
+    assert rec.n_pre_gate == pytest.approx(60 * ON_N / (ON_N + OFF_N), abs=8)
+    assert rec.keep, rec.reasons
+    # 对照: 不做门控时, 这段"受体灭-供体亮"的交替会被当成邻居污染
+    assert P.pre_spread(pd, rec.j, 60)[0] > 5.0
+
+
+def test_efficiency_measures_id_pre_only_while_the_acceptor_is_on():
+    """I_D^pre 混进"受体灭、供体已去淬灭"的帧, E 会掉一半。"""
+    import smlm.fret as fr
+
+    (pa, pd), _ = _anti_correlated()
+    rec, _ = _run(pa, pd, [_donor()])
+    cal = fr.FretCalibration(gamma=1.1)
+
+    gated, _ = fr.fret_efficiency([rec.event], [pa], [pd], cal, verbose=False)
+    plain, _ = fr.fret_efficiency([rec.event], [pa], [pd], cal,
+                                  fr.EfficiencySpec(gate_pre_d=False),
+                                  verbose=False)
+    assert gated[0].ID_pre == pytest.approx(250.0, abs=60)
+    assert gated[0].E == pytest.approx(0.92, abs=0.04)
+    assert plain[0].ID_pre > 2.5 * gated[0].ID_pre      # 未转移态被平均进来
+    assert plain[0].E < gated[0].E - 0.10
 
 
 def test_neighbour_gate_is_optional():

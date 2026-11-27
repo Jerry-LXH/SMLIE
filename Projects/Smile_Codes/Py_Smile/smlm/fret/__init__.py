@@ -26,7 +26,7 @@
 from __future__ import annotations
 
 # --- 事件 ---
-from .events import EventSpec, find_step, scan_steps
+from .events import EventSpec, find_step, scan_steps, red_state, RedState
 
 # --- trace 对的取舍 ---
 from .pairs import (PairCriteria, PairRecord, select_pairs, attach_efficiency,
@@ -50,6 +50,7 @@ from . import viz
 __all__ = [
     # 事件
     'EventSpec', 'find_step', 'scan_steps', 'StepEvent', 'passed',
+    'red_state', 'RedState',
     'CRITERIA', 'CRITERIA_STRICT',
     # trace 对的取舍
     'PairCriteria', 'PairRecord', 'select_pairs', 'attach_efficiency',

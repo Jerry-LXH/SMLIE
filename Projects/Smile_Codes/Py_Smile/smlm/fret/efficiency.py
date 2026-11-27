@@ -7,6 +7,9 @@
 窗口取法
 --------
 ``pre``  : 台阶左侧最多 ``pre_win`` 帧; 不足就从第 0 帧开始, 并计入 ``n_short``。
+           **只平均受体亮着的帧** (``gate_pre_d``): 受体熄灭的间隙里供体去淬灭,
+           那几帧的亮度是"没转移"的状态, 混进来会把 I_D^pre 抬高、把 E 压低。
+           受体平稳亮着时掩码全 True, 与不做门控等价。
 ``post`` : 台阶右侧最多 ``post_win`` 帧, 且只平均**绿光 > post_thr_d** 的帧 ——
            受体漂白后供体去淬灭会再闪烁, 暗帧会把 I_D^post 压低。
 
@@ -29,6 +32,7 @@ class EfficiencySpec:
     post_thr_d: float = 100.0   # post 窗口里只平均"绿光 > 该值"的帧
     min_on: int = 10            # post 窗口内至少要有这么多帧在阈值以上
     min_pre: int = 0            # pre 窗最少要有多少帧 (0 = 只要求 ≥2)
+    gate_pre_d: bool = True     # pre 窗只平均受体亮着的帧
     clip_n: float = 3.0
     clip_iter: int = 2
 
@@ -36,6 +40,8 @@ class EfficiencySpec:
         pre = f'pre≤{self.pre_win} 帧'
         if self.min_pre:
             pre += f' (至少 {self.min_pre})'
+        if self.gate_pre_d:
+            pre += ' 只取受体亮帧'
         return (f'EfficiencySpec({pre}, post≤{self.post_win} 帧, '
                 f'post 只取绿>{self.post_thr_d:.0f}, 至少 {self.min_on} 帧)')
 
@@ -66,7 +72,7 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
     beta = float(cal.beta) if np.isfinite(cal.beta) else 0.0
 
     out, stats = [], {'n_short': 0, 'n_noon': 0, 'n_drop': 0, 'n_pre': 0,
-                      'n_in': len(events)}
+                      'n_gate': 0, 'n_in': len(events)}
     n_tr = min(len(traces_a), len(traces_d))
     bad = [int(ev.emitter_id) for ev in events
            if not 0 <= int(ev.emitter_id) < n_tr]
@@ -92,8 +98,18 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
         if l1 - l0 < spec.pre_win:
             stats['n_short'] += 1
 
-        IA_pre = window_mean(ya[l0:l1], spec.clip_n, spec.clip_iter)
-        ID_pre = window_mean(yd[l0:l1], spec.clip_n, spec.clip_iter)
+        # pre 窗: 只统计受体亮着的帧 (受体熄灭时供体去淬灭, 那几帧不属于"转移态")
+        gate = getattr(ev, 'red_on', None) if spec.gate_pre_d else None
+        if gate is not None:
+            gate = np.asarray(gate, bool)[l0:l1]
+        sel = np.isfinite(ya[l0:l1]) if gate is None else gate
+        n_gate = int(sel.sum()) if gate is not None else int(l1 - l0)
+        if n_gate < 2:
+            stats['n_gate'] += 1
+            continue
+
+        IA_pre = window_mean(ya[l0:l1][sel], spec.clip_n, spec.clip_iter)
+        ID_pre = window_mean(yd[l0:l1][sel], spec.clip_n, spec.clip_iter)
 
         seg_d, seg_a = yd[p0:p1], ya[p0:p1]
         on = np.isfinite(seg_d) & (seg_d > spec.post_thr_d)
@@ -128,6 +144,7 @@ def fret_efficiency(events, traces_a, traces_d, cal: FretCalibration,
 def _report(res, stats, spec, gamma, alpha, beta):
     for k, msg in (('n_pre', f'pre 窗不足 min_pre={spec.min_pre} 帧'),
                    ('n_short', f'pre 不足 {spec.pre_win} 帧'),
+                   ('n_gate', 'pre 窗里受体亮着的帧不足 2 (无法定 I_D^pre)'),
                    ('n_noon', f'post 窗内绿 > {spec.post_thr_d:.0f} 的帧不足 '
                               f'{spec.min_on}'),
                    ('n_drop', '分母 ~0 / I_D^post ≤ 0 / 非有限')):

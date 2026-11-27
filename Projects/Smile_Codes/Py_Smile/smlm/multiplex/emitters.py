@@ -88,6 +88,70 @@ def emitter_centers_xy(emitters) -> np.ndarray:
     return np.asarray([emitter.centroid for emitter in items], dtype=float)
 
 
+def psf_sigma_from_locs(locs, *, channels=None, stat='median',
+                        clip=(0.5, 5.0)):
+    """每个通道的 PSF σ (px), 由 MLE 拟合宽度统计得到, 直接喂给取 trace。
+
+    为什么要量, 不用公式
+    --------------------
+    ``0.2165·λ/NA`` 假设理想、恰好在焦面上的 PSF。实测样品常有轻微离焦与色差,
+    拟合宽度会明显更大: 本样品 (532 nm 激发, 640 nm 发射, NA 1.4, 106.6 nm/px)
+    公式给 0.93 px, 而 8.9 万个绿光/3.9 万个红光定位的拟合中位是 1.35 / 1.43 px。
+
+    σ 偏小不是"少一点光"那么轻微:
+
+    * 孔径半径 ``radius = k_sigma·σ`` 被夹在 ``[2, 7]`` px, 0.93 px → 2 px,
+      1.43 px → 3 px, 收集面积差一倍多;
+    * ``intensity`` 是匹配滤波幅度 (γ 的分母), 核比真 PSF 窄时幅度按
+      ``σ_k²/(σ_k²+σ_PSF²)`` 衰减 —— 0.93 vs 1.43 时只剩 ~0.6, 于是所有
+      SNR 门限和绝对门限 (``red_min`` / ``min_drop_d``) 都在跟一个被压低的
+      信号比大小, 实测 fov4 合格数 4 → 7 只是这一项的效果。
+
+    为什么取中位而不是逐分子
+    ------------------------
+    单条拟合的 σ 噪声大, 密集场里还会被邻居污染; 几万个定位的中位很稳, 且
+    逐通道分开 —— 红绿两路的离焦/色差不共同, 用一个标量会把一路的偏差摊给
+    另一路。
+
+    Parameters
+    ----------
+    locs : {channel: Localizations}
+        各通道**自己坐标系**下的定位 (拟合宽度就在里面)。
+    channels : sequence of str, optional
+        要算的通道; 默认全部。
+    stat : 'median' | 'mean'
+        统计量, 默认中位 (抗离群)。
+    clip : (lo, hi), optional
+        先剔除超出该区间的拟合 (定位过滤之外的第二道保险); ``None`` = 不过滤。
+
+    Returns
+    -------
+    dict
+        ``{channel: σ_px}``, 形状正好可以当
+        :func:`~smlm.multiplex.traces.extract_multichannel_traces` 的 ``sigma``。
+    """
+    if not isinstance(locs, Mapping):
+        raise TypeError('locs must be a {channel: Localizations} mapping')
+    names = list(locs) if channels is None else list(channels)
+    if stat not in ('median', 'mean'):
+        raise ValueError(f"stat must be 'median' or 'mean', got {stat!r}")
+    out = {}
+    for channel in names:
+        if channel not in locs:
+            raise ValueError(f'locs has no entry for channel {channel!r}; '
+                             f'available: {list(locs)}')
+        raw = getattr(locs[channel], 'sigma', None)
+        s = np.asarray(raw, float) if raw is not None else np.zeros(0)
+        s = s[np.isfinite(s)]
+        if clip is not None:
+            s = s[(s >= float(clip[0])) & (s <= float(clip[1]))]
+        if s.size == 0:
+            raise ValueError(f'channel {channel!r} has no finite fitted sigma '
+                             f'inside clip={clip}')
+        out[channel] = float(s.mean() if stat == 'mean' else np.median(s))
+    return out
+
+
 def _per_channel_kw(common, overrides, channels, name='link_kw_per_channel'):
     """把公共参数与逐通道覆盖合成 ``{channel: kwargs}``。"""
     common = dict(common or {})

@@ -53,6 +53,7 @@ class EventSpec:
     sw: int = 4                 # 台阶前后短窗(帧)
     sw_long: int = 20           # 长窗: 在这么长的窗里统计供体的亮帧
     sw_post: int = 100          # "再也不回来"的判断窗: 用这么长窗的中位算持续落差
+    pre_duty_win: int = 150     # 红光状态的统计窗: 台阶前这么多帧里 ON 的占比
     lag_max: int = 16           # 供体抬升允许的最大滞后(帧)
     lag_step: int = 2
 
@@ -140,6 +141,88 @@ def _episodes(on, min_len):
     bounds = np.concatenate(([0], edges, [on.size]))
     return [(int(a), int(b)) for a, b in zip(bounds[:-1], bounds[1:])
             if on[a] and b - a >= int(min_len)]
+
+
+# ---------------------------------------------------------------------------
+#  红光状态: 平稳 / 闪烁 / 闪光的结束 / 没真灭
+# ---------------------------------------------------------------------------
+@dataclass
+class RedState:
+    """漂白事件附近受体通道的状态刻画 (全部由迟滞 ON 掩码得到)。
+
+    ``duty``      台阶前 ``window`` 帧里 ON 的占比 (1 = 一直亮着)
+    ``n_off``     同一窗口内 ≥2 帧的暗段个数 (闪了几次)
+    ``level``     窗口内**亮帧**的中位亮度
+    ``post_ratio`` 灭后长窗电平 / ``level`` (≈0 = 真的灭了)
+    ``label``     ``'steady' | 'blinking' | 'dark' | 'unbleached' | 'unknown'``
+
+    为什么需要它: 受体闪不闪决定了**供体的判据能有多严**。受体平稳亮着时, 供体
+    在 pre 窗里也应当只有光子噪声; 受体自己在闪时, 供体跟着闪是正常的, 用同一把
+    尺子量会把它们全判成"孔径里有别人"。反过来 ``dark`` 说明这个"台阶"只是一次
+    闪光的结束, 根本不是漂白。
+    """
+    duty: float = np.nan
+    n_off: int = -1
+    level: float = np.nan
+    post_ratio: float = np.nan
+    label: str = 'unknown'
+
+    def __repr__(self):
+        return (f'RedState({self.label}, duty={self.duty:.2f}, '
+                f'off={self.n_off}, post={self.post_ratio:.2f})')
+
+
+def red_state(ya, j, sa=None, *, window=150, post_win=100, dark_duty=0.5,
+              steady_off=2, off_ratio=0.25):
+    """估计受体 trace 在台阶 ``j`` 附近的状态 (:class:`RedState`)。
+
+    亮暗电平由**[j-window, j+post_win) 这一段自己**定 (迟滞二值化), 不用整条 trace
+    的 p5/p95: 只短暂亮过一次的分子, 全程分位数全被背景占住, 全局阈值会把噪声帧
+    也判成亮态, 于是占空比虚高、灭后比值虚低。
+
+    判类顺序 (先否后正):
+
+    1. ``duty < dark_duty`` → ``'dark'``: 台阶前大半个窗口是暗的, 这是"一次闪光
+       的结束", 不是漂白;
+    2. ``post_ratio > off_ratio`` → ``'unbleached'``: 灭后没掉到背景, 台阶是暗隙;
+    3. ``n_off <= steady_off`` → ``'steady'``: 一直亮着, 供体也该只有噪声;
+    4. 其余 → ``'blinking'``: 受体自己在闪, 供体的闪不能算污染。
+
+    窗口内亮暗分不开 (p95-p5 < 4σ) 时返回 ``label='unknown'``, 所有数值为 ``nan``
+    —— 没有证据时调用方**不应**据此否决。
+    """
+    ya = np.asarray(ya, float)
+    j = int(j)
+    out = RedState()
+    if sa is None:
+        sa = float(robust_noise(ya))
+    sa = max(float(sa), 1e-6)
+    a, b = max(0, j - int(window)), min(ya.size, j + int(post_win))
+    k = j - a                                   # 台阶在局部窗口里的下标
+    if k < 2 or b - k < 2:
+        return out
+    mask = _on_mask(ya[a:b], sa)
+    if mask is None:
+        return out
+    pre = mask[:k]
+    out.duty = float(pre.mean())
+    offs = _episodes(~pre, 2)
+    out.n_off = int(sum(1 for s, e in offs if e <= k))
+    lit = ya[a:a + k][pre]
+    lit = lit[np.isfinite(lit)]
+    out.level = float(np.median(lit)) if lit.size else np.nan
+    post = _med(ya, a + k, b)
+    if np.isfinite(post) and np.isfinite(out.level) and out.level > 0:
+        out.post_ratio = float(post / out.level)
+    if out.duty < float(dark_duty):
+        out.label = 'dark'
+    elif np.isfinite(out.post_ratio) and out.post_ratio > float(off_ratio):
+        out.label = 'unbleached'
+    elif out.n_off <= int(steady_off):
+        out.label = 'steady'
+    else:
+        out.label = 'blinking'
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +339,12 @@ def find_step(ya, yd, sa=None, sd=None, spec: EventSpec = None):
     # 用 setattr 而不是构造参数: 交互式会话里 %autoreload 可能只重载了本模块,
     # 此时旧 StepEvent 不认 n_on_d, 传参会让整条流程崩掉。
     ev.n_on_d = int(n_on_d)
+    # 受体状态 (平稳/闪烁/闪光结束/没真灭): 供体侧的判据要按它调整严格度
+    ev.red_state = red_state(ya, j, sa, window=spec.pre_duty_win,
+                             post_win=spec.sw_post, off_ratio=spec.off_ratio)
+    # 受体的逐帧 ON 掩码: pre 窗里的供体电平/离散度**只在受体亮着的帧上**统计 ——
+    # 受体熄灭的间隙里供体本来就应该去淬灭变亮, 那不是污染
+    ev.red_on = on
     return ev
 
 
