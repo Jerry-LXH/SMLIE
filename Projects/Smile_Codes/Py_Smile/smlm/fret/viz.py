@@ -187,11 +187,13 @@ def plot_pair_gallery(records, traces_a, traces_d, *, which='both', n=4,
     return fig
 
 
-def plot_efficiency(results, ax=None, *, bins=30, show_don=True, title=None):
+def plot_efficiency(results, ax=None, *, bins=30, show_don=False, title=None):
     """E 分布直方图。
 
-    灰阶梯是 ``E_don = 1 − I_D^pre/I_D^post``: 它完全不看受体通道, 所以不依赖
-    γ/α/β —— 两条分布差很多就说明 γ 或串色修正有问题。
+    ``show_don=True`` 会再叠一条**空心灰阶梯** = ``E_don = 1 − I_D^pre/I_D^post``:
+    它不看受体通道、也不用 γ/α/β，两条分布差很多就说明 γ 或串扰修正有问题。
+    默认不画（图上只留 E）；要做交叉检验时显式打开。``E_don`` 本身照旧写在
+    ``fret.csv`` 里，不看图也能查。
 
     ``E ≳ 1`` 的堆积要单独看: 那些分子的 ``I_D^pre`` 与 0 不可区分, E 实际上是
     **下界**而不是测量值 (分母被 S_A 主导), 图上会把比例标出来。

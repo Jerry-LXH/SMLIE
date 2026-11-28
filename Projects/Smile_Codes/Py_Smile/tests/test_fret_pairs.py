@@ -495,6 +495,26 @@ def test_attach_efficiency_matches_by_emitter_id():
 # ---------------------------------------------------------------------------
 #  画廊
 # ---------------------------------------------------------------------------
+def test_efficiency_plot_hides_e_don_by_default():
+    """默认只画 E；E_don 要显式 show_don=True 才叠上去（它常被当成第二个分布）。"""
+    import matplotlib.pyplot as plt
+    import smlm.fret as fr
+    from smlm.fret import viz
+
+    res = [fr.FretResult(emitter_id=i, frame=0, E=0.5 + 0.05 * i,
+                         E_don=0.4 + 0.05 * i) for i in range(5)]
+
+    fig, ax = plt.subplots()
+    viz.plot_efficiency(res, ax=ax)
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert len(labels) == 1 and 'don' not in labels[0].lower()
+
+    fig2, ax2 = plt.subplots()
+    viz.plot_efficiency(res, ax=ax2, show_don=True)
+    labels2 = [t.get_text() for t in ax2.get_legend().get_texts()]
+    assert any('don' in v.lower() for v in labels2)
+
+
 def test_pair_gallery_renders_both_groups():
     from matplotlib.figure import Figure
     from smlm.fret import viz
