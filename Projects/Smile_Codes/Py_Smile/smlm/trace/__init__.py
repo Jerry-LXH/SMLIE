@@ -18,7 +18,9 @@ from .background import (AnnulusBackground, ring_mask, clip_median,
 
 # --- 逐字段填充框架 ---
 from .fill import (TRACE_FIELDS, FillContext, TraceBox, TraceFiller,
-                   TraceFillPipeline, as_centers_yx, to_table, register_field)
+                   TraceFillPipeline, as_centers_yx, to_table, register_field,
+                   apply_fillers)
+from .io import POOLED_KEYS, load_pooled
 from .signal import ApertureRaw
 from .annulus import AnnulusRing
 from .calculate import IntensityFromRawBg, PoissonSNR, standard_fillers
@@ -42,7 +44,9 @@ __all__ = [
     "TRACE_FIELDS", "FillContext", "TraceBox", "TraceFiller",
     "TraceFillPipeline", "ApertureRaw", "AnnulusRing", "as_centers_yx",
     "to_table", "register_field", "IntensityFromRawBg", "PoissonSNR",
-    "standard_fillers",
+    "standard_fillers", "apply_fillers",
+    # 存取
+    "load_pooled", "POOLED_KEYS",
     # 状态判定
     "ThresholdStates", "ChangepointStates", "summarize_states",
     "select_traces", "runs_of", "STATE_FIELDS", "changepoint", "OFF", "ON",

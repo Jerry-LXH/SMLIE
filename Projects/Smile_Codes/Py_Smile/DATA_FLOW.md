@@ -148,7 +148,7 @@ smlm/
 ├── localize/         检测 + 定位（含 3D 方案 loc/）
 ├── drift/            漂移**估计**
 ├── emitter/          定位 → 轨迹（连接/合并/过滤/统计）
-├── trace/            取亮度 + 状态判定（filler 流水线）
+├── trace/            取亮度 + 状态判定（filler 流水线）+ 池化 trace 读回
 ├── multiplex/        多通道（双视角）配准与多通道 trace
 └── fret/             双通道 FRET：事件 / 筛选 / γαβ / E
 ```
@@ -236,7 +236,8 @@ smlm/
 
 | 文件 | 内容 |
 |---|---|
-| `fill.py` | `TraceBox` / `FillContext` / `TraceFiller` / `TraceFillPipeline` / `register_field` / `to_table` / `as_centers_yx` |
+| `fill.py` | `TraceBox` / `FillContext` / `TraceFiller` / `TraceFillPipeline` / `register_field` / `to_table` / `as_centers_yx`；`apply_fillers` 在**没有影像**的情况下给已有 trace 追加字段（只接受 `plan()` 返回 0 的阶段，状态判定就是这一类） |
+| `io.py` | `load_pooled` 读池化 `traces_pooled.npz` -> `(list[Trace], meta)`，**按 `n_frames` 截掉尾部的 NaN**（不截的话变点检测会静默退化成"整条一个暗段"） |
 | `signal.py` | `ApertureRaw`：信号阶段（孔径内原始积分，`raw` 口径） |
 | `annulus.py` | `AnnulusRing`：背景阶段（分子周围环形背景逐帧估计） |
 | `aperture.py` | 孔径积分工具：`ApertureSpec`、`Aperture`、`aperture_kernel`、`radius_from_sigma`、`sigma_per_molecule`、`crop_centered`、`clean_sigma` |
@@ -302,6 +303,7 @@ smlm/
 - `singleCh/smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
 - `singleCh/smTest_batch.ipynb` —— 单通道批量：只出 trace 库（`traces.npz`）+ trace 图，不筛 trace
 - `singleCh/smTest_manual.ipynb` —— 单通道人工挑选：一页一段（按亮度排序），**选中 = 保留**，换页即落盘 `traces_manual.npz`（只存选中的）；最后池化到 `TRACE_pooled/<组名>/`
+- `singleCh/smTest_blink.ipynb` —— 池化 trace 的闪烁统计：只吃 `TRACE_pooled/<组名>/traces_pooled.npz`，**不碰影像**（`load_pooled` + `apply_fillers`）
 - `dualCh/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
 - `dualCh/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
 - `dualCh/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
