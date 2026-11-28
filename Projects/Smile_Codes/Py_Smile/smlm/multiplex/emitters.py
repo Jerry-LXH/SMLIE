@@ -134,12 +134,17 @@ def psf_sigma_from_locs(locs, *, channels=None, stat='median',
     if not isinstance(locs, Mapping):
         raise TypeError('locs must be a {channel: Localizations} mapping')
     names = list(locs) if channels is None else list(channels)
+    if stat not in ('median', 'mean'):
+        raise ValueError(f"stat must be 'median' or 'mean', got {stat!r}")
     out = {}
     for channel in names:
         if channel not in locs:
             raise ValueError(f'locs has no entry for channel {channel!r}; '
                              f'available: {list(locs)}')
-        out[channel] = psf_sigma(locs[channel], stat=stat, clip=clip)
+        try:
+            out[channel] = psf_sigma(locs[channel], stat=stat, clip=clip)
+        except ValueError as exc:        # 补上通道名, 否则分不清是哪一路
+            raise ValueError(f'channel {channel!r}: {exc}') from None
     return out
 
 
