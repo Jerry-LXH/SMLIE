@@ -303,7 +303,7 @@ smlm/
 - `dual/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
 - `dual/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
 - `dual/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
-- `dual/smTest_dual_manual.ipynb` —— **人工复筛**：把粗筛通过项全部摊开看一遍，删掉不该要的，落盘 `*_manual.*`
+- `dual/smTest_dual_manual.ipynb` —— **人工复筛**：一页一个视野，勾上 = 剔除，翻页即自动落盘 `*_manual.*`；最后按 `GROUPS` 分组池化到 `FRET_stats/<组名>/`
 
 ```python
 from smlm.io import load_raw, run_cached
