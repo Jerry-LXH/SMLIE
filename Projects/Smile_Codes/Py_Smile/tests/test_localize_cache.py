@@ -6,6 +6,7 @@ import pytest
 from smlm.datatypes import ImageStack, Localizations
 from smlm.io import result_path, run_cached
 from smlm.localize import pipeline as localize_pipeline
+from smlm.localize import psf_sigma
 from smlm.multiplex import pipeline as multiplex_pipeline
 
 
@@ -18,6 +19,33 @@ def _locs():
         bg=np.array([1.0, 1.0]),
         sigma=np.array([1.0, 1.0]),
     )
+
+
+# ---------------------------------------------------------------------------
+#  PSF σ: 用拟合宽度, 不用 λ/NA 的理论值
+# ---------------------------------------------------------------------------
+def _locs_sigma(values):
+    n = len(values)
+    return Localizations(frame=np.zeros(n, int), x=np.zeros(n),
+                         y=np.zeros(n), photons=np.zeros(n),
+                         bg=np.zeros(n), sigma=np.asarray(values, float))
+
+
+def test_psf_sigma_is_the_median_of_fitted_widths():
+    """单个离谱的拟合不能带动结果 —— 中位, 不是均值。"""
+    locs = _locs_sigma([1.30, 1.32, 1.28, 1.35, 9.90])
+    assert psf_sigma(locs) == pytest.approx(1.31)      # (1.30+1.32)/2, 9.9 被剔除
+    assert psf_sigma(locs, stat='mean', clip=None) > 2.0
+
+
+def test_psf_sigma_clips_outliers_and_validates():
+    locs = _locs_sigma([0.1, 1.2, 1.4, 1.6, 99.0, np.nan])
+    assert psf_sigma(locs) == pytest.approx(1.4)        # 0.1/99/nan 被剔除
+    assert psf_sigma(locs, clip=None) == pytest.approx(1.4)
+    with pytest.raises(ValueError, match='sigma'):
+        psf_sigma(_locs_sigma([0.0, np.nan]))
+    with pytest.raises(ValueError, match='stat'):
+        psf_sigma(locs, stat='mode')
 
 
 def _stack(crop_offset=(4, 5)):

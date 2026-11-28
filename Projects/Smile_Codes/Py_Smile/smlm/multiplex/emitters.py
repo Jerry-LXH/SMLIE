@@ -19,6 +19,7 @@ import numpy as np
 
 from ..datatypes import MultiImageStack
 from ..emitter import analyze_emitters_sm
+from ..localize import psf_sigma
 
 
 def channel_names(available, channels=None, *, name='channels', required=()):
@@ -111,7 +112,7 @@ def psf_sigma_from_locs(locs, *, channels=None, stat='median',
     ------------------------
     单条拟合的 σ 噪声大, 密集场里还会被邻居污染; 几万个定位的中位很稳, 且
     逐通道分开 —— 红绿两路的离焦/色差不共同, 用一个标量会把一路的偏差摊给
-    另一路。
+    另一路。单通道版本就是 :func:`smlm.localize.psf_sigma`, 这里只是逐通道调用它。
 
     Parameters
     ----------
@@ -133,22 +134,12 @@ def psf_sigma_from_locs(locs, *, channels=None, stat='median',
     if not isinstance(locs, Mapping):
         raise TypeError('locs must be a {channel: Localizations} mapping')
     names = list(locs) if channels is None else list(channels)
-    if stat not in ('median', 'mean'):
-        raise ValueError(f"stat must be 'median' or 'mean', got {stat!r}")
     out = {}
     for channel in names:
         if channel not in locs:
             raise ValueError(f'locs has no entry for channel {channel!r}; '
                              f'available: {list(locs)}')
-        raw = getattr(locs[channel], 'sigma', None)
-        s = np.asarray(raw, float) if raw is not None else np.zeros(0)
-        s = s[np.isfinite(s)]
-        if clip is not None:
-            s = s[(s >= float(clip[0])) & (s <= float(clip[1]))]
-        if s.size == 0:
-            raise ValueError(f'channel {channel!r} has no finite fitted sigma '
-                             f'inside clip={clip}')
-        out[channel] = float(s.mean() if stat == 'mean' else np.median(s))
+        out[channel] = psf_sigma(locs[channel], stat=stat, clip=clip)
     return out
 
 

@@ -335,7 +335,8 @@ traces  = tr.TraceFillPipeline(corr_image.data, centers_yx, sigma=ph, tag='r').r
 tr.select_traces(traces, n_on=(2, None))
 ```
 
-`sigma=ph` 用**拟合宽度**（`np.median(corr_locs.sigma)`，多通道下用
+`sigma=ph` 用**拟合宽度**（`smlm.localize.psf_sigma(corr_locs)`，多通道下用
 `mp.psf_sigma_from_locs(multiLocs)`），不要用 `0.2165·λ/NA` 的理论值：实测有轻微
-离焦/色差时理论值偏小 40% 以上，孔径半径被 `[2,7]` px 夹住（2 px vs 3 px），
-匹配滤波幅度衰减到 ~0.6，`intensity` 的绝对标度随之失真。
+离焦/色差时理论值偏小 40% 以上（0.93 px vs 拟合 1.43/1.35 px），孔径半径被
+`[2,7]` px 夹住（2 px vs 3 px），匹配滤波幅度衰减到 ~0.6，`intensity` 的绝对标度
+随之失真。
