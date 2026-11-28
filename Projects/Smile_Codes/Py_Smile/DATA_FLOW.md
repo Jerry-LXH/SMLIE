@@ -2,7 +2,7 @@
 
 > 本文档总结 `Py_Smile/smlm` 包中定义在 `datatypes.py` 的关键数据类型，以及它们在整个单分子定位 / 时间轨迹分析流程中的数据流动方式。
 > 所有数据类型的定义见 `smlm/datatypes.py`；**各子包/模块的分工见第 3 节**；端到端调用示例见
-> `smTest.ipynb`（单通道）与 `dual/smTest_dual.ipynb`（双通道 FRET）。
+> `singleCh/smTest.ipynb`（单通道）与 `dualCh/smTest_dual.ipynb`（双通道 FRET）。
 > **注意**: 图像处理类 Transform (预处理/插值/去噪/反卷积/SOFI/RIED/漂移校正) 统一收敛到
 > `smlm/imgprocess`；旧的 `smlm/preprocess` 与 `smlm/sofi` 目录已删除。
 > `smlm/drift` 只负责漂移**估计**，校正侧 (`DriftCorrector`) 在 `smlm/imgprocess/temporal.py`。
@@ -298,12 +298,13 @@ smlm/
 
 ## 5. 快速上手
 
-对应 notebook（双通道的都放在 `dual/`）：
-- `smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
-- `dual/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
-- `dual/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
-- `dual/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
-- `dual/smTest_dual_manual.ipynb` —— **人工复筛**：一页一个视野，勾上 = 剔除，翻页即自动落盘 `*_manual.*`；最后按 `GROUPS` 分组池化到 `FRET_stats/<组名>/`
+对应 notebook（单通道放 `singleCh/`，双通道放 `dualCh/`）：
+- `singleCh/smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
+- `singleCh/smTest_batch.ipynb` —— 单通道批量：只出 trace 库（`traces.npz`）+ trace 图，不筛 trace
+- `dualCh/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
+- `dualCh/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
+- `dualCh/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
+- `dualCh/smTest_dual_manual.ipynb` —— **人工复筛**：一页一个视野，勾上 = 剔除，翻页即自动落盘 `*_manual.*`；最后按 `GROUPS` 分组池化到 `FRET_stats/<组名>/`
 
 ```python
 from smlm.io import load_raw, run_cached
