@@ -301,6 +301,7 @@ smlm/
 对应 notebook（单通道放 `singleCh/`，双通道放 `dualCh/`）：
 - `singleCh/smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
 - `singleCh/smTest_batch.ipynb` —— 单通道批量：只出 trace 库（`traces.npz`）+ trace 图，不筛 trace
+- `singleCh/smTest_manual.ipynb` —— 单通道人工挑选：一页一段（按亮度排序），**选中 = 保留**，换页即落盘 `traces_manual.npz`（只存选中的）；最后池化到 `TRACE_pooled/<组名>/`
 - `dualCh/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
 - `dualCh/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
 - `dualCh/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
