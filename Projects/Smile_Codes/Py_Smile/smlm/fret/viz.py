@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .io import TracesByID
+
 
 # ---------------------------------------------------------------------------
 #  图像块
@@ -116,6 +118,9 @@ def plot_pair_gallery(records, traces_a, traces_d, *, which='both', n=4,
     records : list[PairRecord]
         :func:`~smlm.fret.pairs.select_pairs` 的输出。想只看某个子集 (例如
         ``E < 0.85`` 的那些) 就先把列表筛好再传进来, 配合 ``which='kept'``。
+    traces_a, traces_d : list or dict-like
+        trace 序列或 ``{emitter_id: trace}``。内部**按 ``emitter_id`` 取**,
+        所以只载入一部分分子时 (下标 ≠ 编号) 也不会取错。
     which : 'kept' | 'rejected' | 'both'
     n : int
         每组最多画几条。否决组按"首个否决原因"排序后均匀取样, 所以能看到各种
@@ -162,6 +167,7 @@ def plot_pair_gallery(records, traces_a, traces_d, *, which='both', n=4,
     figsize = figsize or (3.1 * ncol, 1.9 * max(len(blocks), 1))
     fig, axes = plt.subplots(len(blocks), ncol, figsize=figsize, dpi=dpi,
                              squeeze=False)
+    tr_a, tr_d = TracesByID(traces_a), TracesByID(traces_d)
     for r, (label, chunk, first) in enumerate(blocks):
         for c in range(ncol):
             ax = axes[r][c]
@@ -169,7 +175,7 @@ def plot_pair_gallery(records, traces_a, traces_d, *, which='both', n=4,
                 ax.axis('off')
                 continue
             rec = chunk[c]
-            plot_pair(ax, traces_a[rec.emitter_id], traces_d[rec.emitter_id],
+            plot_pair(ax, tr_a[rec.emitter_id], tr_d[rec.emitter_id],
                       rec.event, ex_time=ex_time, pre_win=pre_win,
                       post_win=post_win, title=_pair_title(rec))
             for side in ('top', 'right'):

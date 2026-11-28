@@ -110,6 +110,37 @@ def save_traces_csv(traces_d, traces_a, t_s, path, verbose=True):
     return path
 
 
+class TracesByID:
+    """按 ``emitter_id`` 取 trace; trace 里没有该字段时退回按下标 (旧行为)。
+
+    为什么需要它: 画图/落盘都是"拿到一个分子编号 → 取它的 trace", 而**列表下标
+    不等于编号**。批量的常规路径里两者恰好相同 (trace 按 emitter 顺序生成),
+    但人工复筛只载入一部分分子, 或从 csv 读回来时顺序不同, 按下标取到的就是
+    另一个分子的曲线 (画出来的图看着正常, 数据却是错的)。
+    """
+
+    def __init__(self, seq):
+        if isinstance(seq, TracesByID):      # 幂等: 重复包一层不改变语义
+            self._seq, self._map = seq._seq, seq._map
+            return
+        self._seq = list(seq)
+        ids = [t.get('emitter_id') for t in self._seq]
+        # 编号缺失或重复时按编号取没有意义 (会静默取错), 退回按下标
+        if any(i is None for i in ids) or len(set(map(int, ids))) != len(ids):
+            self._map = None
+        else:
+            self._map = {int(i): t for i, t in zip(ids, self._seq)}
+
+    def __getitem__(self, key):
+        return self._seq[int(key)] if self._map is None else self._map[int(key)]
+
+    def __iter__(self):
+        return iter(self._seq)
+
+    def __len__(self):
+        return len(self._seq)
+
+
 def load_traces_csv(path, verbose=False):
     """把 :func:`save_traces_csv` 的长表读回成按分子分块的数组。
 

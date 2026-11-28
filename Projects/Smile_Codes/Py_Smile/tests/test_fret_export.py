@@ -66,6 +66,8 @@ def test_save_bundle_writes_every_file(tmp_path):
     assert set(written) == {'dir', 'traces_all', 'traces_good', 'fret_csv',
                             'gallery_png', 'e_png'}
     for key, name in fr.FILES.items():
+        if key == 'rejected_png':
+            continue          # 只有 include_rejected=True 才写
         p = os.path.join(out, name)
         assert os.path.getsize(p) > 0, name
         assert written[key] == p
@@ -124,6 +126,62 @@ def test_fret_csv_qc_columns_are_blank_without_diagnostics(tmp_path):
         rows = list(csv.DictReader(f))
     for c in fr.io.QC_COLS:
         assert all(r[c] == '' for r in rows), c
+
+
+def test_save_bundle_suffix_keeps_manual_round_separate(tmp_path):
+    """人工复筛要落在同一目录里, 文件名必须能和机器筛的分开。"""
+    assert fr.filenames('_manual')['e_png'] == 'E_distribution_manual.png'
+    assert fr.filenames('_manual')['gallery_png'] == 'good_traces_all_manual.png'
+    assert fr.filenames() == fr.FILES
+
+    td, ta = _channels()
+    written = fr.save_bundle(
+        tmp_path, records=_records(), results=_results(),
+        traces_d=td, traces_a=ta, cal=_cal(), ex_time=EX, suffix='_manual',
+        include_all=False, verbose=False)
+    assert os.path.basename(written['fret_csv']) == 'fret_manual.csv'
+    assert os.path.basename(written['traces_good']) == 'good_traces_manual.csv'
+    assert os.path.basename(written['e_png']) == 'E_distribution_manual.png'
+    assert not os.path.exists(tmp_path / 'E_distribution.png')   # 没碰机器筛的
+
+
+def test_save_bundle_draws_removed_traces_when_asked(tmp_path):
+    """人工删掉的 trace 要留一张图, 否则事后无从复核。"""
+    td, ta = _channels()
+    recs = _records()
+    for k in (0, 2):
+        recs[k].event = _event(k)
+    recs[1].event = _event(1)          # 中间这条被人工删掉
+    recs[1].reasons = ['manual']
+
+    plain = fr.save_bundle(tmp_path / 'a', records=recs, results=_results(),
+                           traces_d=td, traces_a=ta, ex_time=EX, verbose=False)
+    assert 'rejected_png' not in plain
+    assert not (tmp_path / 'a' / fr.FILES['rejected_png']).exists()
+
+    written = fr.save_bundle(tmp_path / 'b', records=recs, results=_results(),
+                             traces_d=td, traces_a=ta, ex_time=EX,
+                             include_rejected=True, verbose=False)
+    p = tmp_path / 'b' / fr.FILES['rejected_png']
+    assert written['rejected_png'] == str(p)
+    assert p.stat().st_size > 0
+
+
+def test_gallery_picks_traces_by_emitter_id_not_position(tmp_path):
+    """人工复筛只载入一部分分子, 下标 ≠ emitter_id, 画图仍要取对的那条。"""
+    td, ta = _channels()
+    recs = _records()
+    keep = [recs[0], recs[2]]
+    for r in keep:
+        r.event = _event(r.emitter_id)
+    # 只给 id 0 和 2 两条 trace: 列表下标 1 对应 id 2
+    sub_d = [td[0], td[2]]
+    sub_a = [ta[0], ta[2]]
+
+    fig = fr.viz.plot_pair_gallery(keep, sub_a, sub_d, which='kept',
+                                   n=2, ex_time=EX)
+    titles = [ax.get_title() for ax in fig.axes if ax.get_title()]
+    assert {t.split()[0] for t in titles} == {'#0', '#2'}
 
 
 def test_trace_tables_hold_all_and_only_kept(tmp_path):

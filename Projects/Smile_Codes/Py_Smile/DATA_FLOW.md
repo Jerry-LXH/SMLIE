@@ -2,7 +2,7 @@
 
 > 本文档总结 `Py_Smile/smlm` 包中定义在 `datatypes.py` 的关键数据类型，以及它们在整个单分子定位 / 时间轨迹分析流程中的数据流动方式。
 > 所有数据类型的定义见 `smlm/datatypes.py`；**各子包/模块的分工见第 3 节**；端到端调用示例见
-> `smTest.ipynb`（单通道）与 `smTest_dual.ipynb`（双通道 FRET）。
+> `smTest.ipynb`（单通道）与 `dual/smTest_dual.ipynb`（双通道 FRET）。
 > **注意**: 图像处理类 Transform (预处理/插值/去噪/反卷积/SOFI/RIED/漂移校正) 统一收敛到
 > `smlm/imgprocess`；旧的 `smlm/preprocess` 与 `smlm/sofi` 目录已删除。
 > `smlm/drift` 只负责漂移**估计**，校正侧 (`DriftCorrector`) 在 `smlm/imgprocess/temporal.py`。
@@ -279,7 +279,7 @@ smlm/
 | `efficiency.py` | `EfficiencySpec` / `fret_efficiency` / `window_mean`：先算 `S_A`，再给 `E`（用 γ）与 `E_don`（不用 γ 的交叉检验）。`I_A^pre` / `I_D^pre` 只平均**受体亮着的帧**（受体闪时，熄灭间隙里供体已去淬灭，混进来会把 E 压低） |
 | `datatypes.py` | `StepEvent` / `FretResult` / `CRITERIA` / `CRITERIA_STRICT` / `passed`：FRET 专用类型与判据名 |
 | `io.py` | `save_csv`（逐分子，可带 `qc` 追加 `QC_COLS` 那几列：`red_label` / `red_duty` / `spread` / `n_d_pre`） / `save_traces_csv`（全帧长表） / `load_traces_csv`（读回成按分子分块的数组） / `TRACE_COLS` |
-| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 就不写未筛选的那张表）；`fret.csv` 由 `records` 自动带上判据量，下游按 `red_label` 就能只取"受体平稳"的子集。只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名 |
+| `export.py` | `save_bundle(out_dir, ...)`：一次把 `fret.csv` / `E_distribution.png` / `good_traces_all.png` / `traces_all.csv` / `good_traces.csv` 全部写好（`include_all=False` 不写未筛选的那张表，`include_rejected=True` 额外写 `rejected_traces.png`，`suffix='_manual'` 整组改名不覆盖）；`fret.csv` 由 `records` 自动带上判据量，下游按 `red_label` 就能只取"受体平稳"的子集。只做编排，写表在 `io`、画图在 `viz`。`FILES` 是对外承诺的文件名，`filenames(suffix)` 是它的加后缀版本 |
 | `viz.py` | `plot_pair` / `plot_pair_gallery`（含 `which='kept'/'rejected'`）/ `plot_gamma` / `plot_efficiency` / `plot_efficiency_vs_brightness` |
 
 ---
@@ -298,11 +298,12 @@ smlm/
 
 ## 5. 快速上手
 
-对应 notebook：
+对应 notebook（双通道的都放在 `dual/`）：
 - `smTest.ipynb` —— 单通道：读 sif → 定位 → 漂移 → emitter → trace 状态
-- `smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
-- `smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
-- `smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
+- `dual/smTest_dual.ipynb` —— 双通道 FRET：ROI → 漂移 → emitter → trace 对 → 判据 → γ/α/E
+- `dual/smTest_dual_calibration.ipynb` —— 双通道标定（`MultichannelROI` + `MultiChannelCalibrationBundle`）
+- `dual/smTest_dual_batch.ipynb` —— 批量处理（每个视野一键落盘到 `<sif 主名>_fret/`）
+- `dual/smTest_dual_manual.ipynb` —— **人工复筛**：把粗筛通过项全部摊开看一遍，删掉不该要的，落盘 `*_manual.*`
 
 ```python
 from smlm.io import load_raw, run_cached
